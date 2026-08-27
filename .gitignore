@@ -1,0 +1,7 @@
+config.json
+browser-data/
+debug-*.png
+order-result.png
+dry-run-checkout.png
+__pycache__/
+*.pyc
