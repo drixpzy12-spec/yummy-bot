@@ -413,6 +413,15 @@ function buildFaqContainer() {
   ));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `## 🚗 DoorDash\n` +
+    `• Create a DoorDash Group Order\n` +
+    `• Add your items to the group order\n` +
+    `• Send the group invite link in this ticket\n` +
+    `• Send a screenshot showing your *subtotal*\n` +
+    `• We’ll calculate your price, then place the order after payment`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
     `## ✅ What You Get\n` +
     `• Live order tracking\n` +
     `• Fast delivery\n` +
