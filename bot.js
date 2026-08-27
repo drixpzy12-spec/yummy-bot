@@ -707,8 +707,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Restore permissions for all chefs
       try {
         await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{});
-        // Remove claimer's explicit overwrite (they still have role access)
         await interaction.channel.permissionOverwrites.delete(claimedBy).catch(()=>{});
+      } catch {}
+      // Resend fresh claim prompt so chefs can press Claim again
+      try {
+        const stored = ticketStore.get(channelId);
+        if (stored) {
+          const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
+          const pingIds = [...clockedIn];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: [stored.user.id, ...pingIds] } }).catch(()=>{});
+        }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed by ${interaction.user.tag}`);
       return;
@@ -821,6 +829,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const msgs = await interaction.channel.messages.fetch({ limit: 10 }).catch(()=>null);
           const botMsg = msgs?.find(m => m.author.id === client.user.id && m.components.length > 0);
           if (botMsg) await botMsg.edit({ components: [updated], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+          // Resend fresh claim prompt so chefs can press Claim again
+          const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
+          const pingIds2 = [...clockedIn];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: [stored.user.id, ...pingIds2] } }).catch(()=>{});
         }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed via /unclaim by ${interaction.user.tag}`);
