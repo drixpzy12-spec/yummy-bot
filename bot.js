@@ -593,8 +593,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const channelId = interaction.channelId;
       if (claimedTickets.has(channelId)) {
         const claimedBy = claimedTickets.get(channelId);
-        await interaction.reply({ content: `⚠️ Already claimed by <@${claimedBy}>`, ephemeral: true });
-        return;
+        // If ticket was unclaimed (moved back to Tickets) but Map stale, clear it
+        if (interaction.channel.parentId === TICKET_CATEGORY_ID) {
+          claimedTickets.delete(channelId);
+        } else {
+          await interaction.reply({ content: `⚠️ Already claimed by <@${claimedBy}>`, ephemeral: true });
+          return;
+        }
       }
 
       claimedTickets.set(channelId, interaction.user.id);
@@ -748,8 +753,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       if (claimedTickets.has(interaction.channelId)) {
-        await interaction.reply({ content: `⚠️ Already claimed by <@${claimedTickets.get(interaction.channelId)}>`, ephemeral: true });
-        return;
+        const cBy = claimedTickets.get(interaction.channelId);
+        if (interaction.channel.parentId === TICKET_CATEGORY_ID) {
+          claimedTickets.delete(interaction.channelId);
+        } else {
+          await interaction.reply({ content: `⚠️ Already claimed by <@${cBy}>`, ephemeral: true });
+          return;
+        }
       }
       claimedTickets.set(interaction.channelId, interaction.user.id);
       const slashClaimContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
