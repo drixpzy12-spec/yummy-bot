@@ -289,7 +289,7 @@ function buildTicketContainer(deal, orderData, user, claimedBy = null) {
   // Buttons inside container (Components V2)
   const row = new ActionRowBuilder().addComponents(
     claimedBy
-      ? new ButtonBuilder().setCustomId('claim_ticket_claimed').setLabel(`Claimed by ${claimedBy}`).setStyle(ButtonStyle.Secondary).setDisabled(true).setEmoji('✅')
+      ? new ButtonBuilder().setCustomId('unclaim_ticket').setLabel('Unclaim').setStyle(ButtonStyle.Secondary).setEmoji('↩️')
       : new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success).setEmoji('🙋'),
     new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger).setEmoji('🔒')
   );
@@ -458,6 +458,10 @@ const commands = [
     .setDescription('Claim this ticket (Chef only)')
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('unclaim')
+    .setDescription('Unclaim this ticket (Chef only)')
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('open')
     .setDescription('Open restaurant - allow tickets and set status to 🟢-status')
     .toJSON(),
@@ -598,11 +602,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const updated = buildTicketContainer(stored.deal, stored.orderData, stored.user, interaction.user.id);
           await interaction.message.edit({ components: [updated], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
         } else {
-          // fallback: disable button in place
           const fallback = new ContainerBuilder().setAccentColor(0x2ECC71)
             .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Claimed by <@${interaction.user.id}>`));
           const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('claim_ticket_claimed').setLabel(`Claimed by ${interaction.user.username}`).setStyle(ButtonStyle.Secondary).setDisabled(true).setEmoji('✅'),
+            new ButtonBuilder().setCustomId('unclaim_ticket').setLabel('Unclaim').setStyle(ButtonStyle.Secondary).setEmoji('↩️'),
             new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger).setEmoji('🔒')
           );
           fallback.addActionRowComponents(row);
@@ -645,6 +648,55 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } catch {}
 
       console.log(`[✔] Ticket ${interaction.channel.name} claimed by ${interaction.user.tag} - locked to 1:1 (read-only for other chefs) and moved to ${CLAIMED_CATEGORY_ID}`);
+      return;
+    }
+
+    // === BUTTON: Unclaim ===
+    if (interaction.isButton() && interaction.customId === 'unclaim_ticket') {
+      if (!hasChefPermission(interaction.member, interaction.guild)) {
+        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> or higher can unclaim.', ephemeral: true });
+        return;
+      }
+      const channelId = interaction.channelId;
+      if (!claimedTickets.has(channelId)) {
+        await interaction.reply({ content: '⚠️ Ticket is not claimed.', ephemeral: true });
+        return;
+      }
+      const claimedBy = claimedTickets.get(channelId);
+      // Only claimer or Admin can unclaim
+      const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      if (interaction.user.id !== claimedBy && !isAdmin) {
+        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim this.`, ephemeral: true });
+        return;
+      }
+      claimedTickets.delete(channelId);
+      const unclaimContainer = new ContainerBuilder().setAccentColor(0xF39C12)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`↩️ **Unclaimed by <@${interaction.user.id}>** — ticket is now open for any chef.`));
+      await interaction.reply({ components: [unclaimContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+      // Rebuild ticket as unclaimed
+      try {
+        const stored = ticketStore.get(channelId);
+        if (stored) {
+          const updated = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
+          await interaction.message.edit({ components: [updated], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+        }
+      } catch {}
+      // Move back to Tickets category and rename
+      try {
+        if (TICKET_CATEGORY_ID) await interaction.channel.setParent(TICKET_CATEGORY_ID, { lockPermissions: false }).catch(()=>{});
+        const stored = ticketStore.get(channelId);
+        const dealShort = stored?.deal?.short || 'deal';
+        const customerTag = stored?.user?.username || 'customer';
+        const newName = `ticket-${customerTag.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${dealShort}`.slice(0, 90);
+        await interaction.channel.setName(newName).catch(()=>{});
+      } catch {}
+      // Restore permissions for all chefs
+      try {
+        await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{});
+        // Remove claimer's explicit overwrite (they still have role access)
+        await interaction.channel.permissionOverwrites.delete(claimedBy).catch(()=>{});
+      } catch {}
+      console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed by ${interaction.user.tag}`);
       return;
     }
 
@@ -714,6 +766,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (botMsg) await botMsg.edit({ components: [updatedSlash], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
         }
       } catch {}
+      return;
+    }
+
+    // === SLASH: /unclaim ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'unclaim') {
+      if (!hasChefPermission(interaction.member, interaction.guild)) {
+        await interaction.reply({ content: '❌ Only Chef+ can unclaim.', ephemeral: true });
+        return;
+      }
+      if (!claimedTickets.has(interaction.channelId)) {
+        await interaction.reply({ content: '⚠️ This ticket is not claimed.', ephemeral: true });
+        return;
+      }
+      const claimedBy = claimedTickets.get(interaction.channelId);
+      const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      if (interaction.user.id !== claimedBy && !isAdmin) {
+        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim.`, ephemeral: true });
+        return;
+      }
+      claimedTickets.delete(interaction.channelId);
+      const unclaimSlashContainer = new ContainerBuilder().setAccentColor(0xF39C12)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`↩️ **Unclaimed by <@${interaction.user.id}>** — now open`));
+      await interaction.reply({ components: [unclaimSlashContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+      try {
+        if (TICKET_CATEGORY_ID) await interaction.channel.setParent(TICKET_CATEGORY_ID, { lockPermissions: false }).catch(()=>{});
+        const stored = ticketStore.get(interaction.channelId);
+        const dealShort = stored?.deal?.short || 'deal';
+        const customerTag = stored?.user?.username || 'customer';
+        await interaction.channel.setName(`ticket-${customerTag.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${dealShort}`.slice(0, 90)).catch(()=>{});
+        await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{});
+        await interaction.channel.permissionOverwrites.delete(claimedBy).catch(()=>{});
+        if (stored) {
+          const updated = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
+          const msgs = await interaction.channel.messages.fetch({ limit: 10 }).catch(()=>null);
+          const botMsg = msgs?.find(m => m.author.id === client.user.id && m.components.length > 0);
+          if (botMsg) await botMsg.edit({ components: [updated], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+        }
+      } catch {}
+      console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed via /unclaim by ${interaction.user.tag}`);
       return;
     }
 
