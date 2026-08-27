@@ -486,6 +486,10 @@ const commands = [
     .setDescription('Show How To Order FAQ (Admin only)')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('chefs')
+    .setDescription('How to use the bot for chefs and admins')
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -882,6 +886,48 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const targetChannel = interaction.channel;
       await targetChannel.send(faq);
       await interaction.reply({ content: `✅ FAQ sent in <#${targetChannel.id}>`, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /chefs ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'chefs') {
+      if (!hasChefPermission(interaction.member, interaction.guild) && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: '❌ Only Chefs or Admins can use this.', ephemeral: true });
+        return;
+      }
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Chef & Admin Guide`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`How to use Yummy bot — clock, status & tickets`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### 🕐 Clock In / Out\n` +
+        `• \`/clockin\` — Clock in, start receiving ticket pings (<@&${CHEF_ROLE_ID}>)\n` +
+        `• \`/clockout\` — Clock out, stop receiving pings\n` +
+        `• Only clocked-in chefs get pinged when a customer creates a ticket`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### 🟢 / 🔴 Open & Close\n` +
+        `• \`/open\` — Set restaurant to **open**, allow tickets, rename status to \`🟢-status\`, send open gif with @everyone\n` +
+        `• \`/closed\` — Set to **closed**, block new tickets (replies *Restaurant is currently closed*), rename to \`🔴-status\`, send closed gif\n` +
+        `• Requires Chef+ or Manage Server`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### 🎟️ Claim & Unclaim\n` +
+        `• **Claim button** or \`/claim\` — Claim a ticket, locks it 1:1 (other chefs read-only), moves to \`Claimed\` category, renames to \`claimed-<you>\`\n` +
+        `• **Unclaim button** or \`/unclaim\` — Release your claimed ticket, moves back to \`Tickets\`, restores permissions, re-enables Claim\n` +
+        `• Only the claimer or an Admin can unclaim`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### 🔧 Admin & Utils\n` +
+        `• \`/panel\` / \`!panel\` — Post ticket panel (Admin only)\n` +
+        `• \`/faq\` — Post How To Order guide (Admin only)\n` +
+        `• \`/deals\` — List all restaurants (anyone)\n` +
+        `• \`/close\` — Close & delete current ticket`
+      ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
 
