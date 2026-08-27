@@ -391,6 +391,48 @@ function buildPanel() {
   return { components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 };
 }
 
+function buildFaqContainer() {
+  const container = new ContainerBuilder().setAccentColor(0xFFA500);
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🍔 How To Order`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `**10 for 30 Deals**\n` +
+    `• Use \`/deals\` to view available restaurants\n` +
+    `• Pick a restaurant and make your order\n` +
+    `• Send a screenshot of your *final checkout total*\n` +
+    `• We’ll calculate your price\n` +
+    `• Pay, and we’ll place the order`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `## 🥬 UE (50% OFF)\n` +
+    `• Create an Uber Eats Group Order\n` +
+    `• Add your items to the group order\n` +
+    `• Send the group invite link in this ticket\n` +
+    `• Send a screenshot showing your *subtotal*\n` +
+    `• We’ll calculate your price, then place the order after payment`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `## ✅ What You Get\n` +
+    `• Live order tracking\n` +
+    `• Fast delivery\n` +
+    `• Transparent pricing`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `## 💳 Payments\n` +
+    `PayPal • Cash App • Venmo • Apple Pay • Crypto • Zelle • Chime • Roblox Items`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `## ⚠️ Rules\n` +
+    `• Fake payment screenshots = instant ban\n` +
+    `• Personal information is deleted after your order is completed.\n` +
+    `• If your order is CANCELLED or DELIVERED and you cannot find it, we are unable to give u a refund or a reorder.`
+  ));
+  return { components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 };
+}
+
 // === SLASH COMMAND REGISTRATION ===
 const commands = [
   new SlashCommandBuilder()
@@ -425,6 +467,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('clockout')
     .setDescription('Clock out - stop receiving ticket pings (Chef only)')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('faq')
+    .setDescription('Show How To Order FAQ (Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .toJSON(),
 ];
 
@@ -722,6 +769,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
       clockedIn.delete(interaction.user.id);
       saveClock();
       await interaction.reply({ content: '✅ Clocked out! You will no longer receive ticket pings.', ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /faq ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'faq') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: '❌ Only **Admins** can use `/faq`.', ephemeral: true });
+        return;
+      }
+      const faq = buildFaqContainer();
+      const targetChannel = interaction.channel;
+      await targetChannel.send(faq);
+      await interaction.reply({ content: `✅ FAQ sent in <#${targetChannel.id}>`, ephemeral: true });
       return;
     }
 
