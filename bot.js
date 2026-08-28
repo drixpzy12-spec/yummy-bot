@@ -68,6 +68,17 @@ async function updateStatusGif(open) {
       } catch {}
       statusGifMessageId = null;
     }
+    // Cleanup any stale @everyone CLOSED messages left from before fix (Railway reset loses status.json)
+    try {
+      const recent = await ch.messages.fetch({ limit: 10 }).catch(()=>null);
+      if (recent) {
+        for (const m of recent.values()) {
+          if (m.author.id === client.user.id && m.content.includes('@everyone') && m.embeds[0]?.description?.includes('CLOSED')) {
+            await m.delete().catch(()=>{});
+          }
+        }
+      }
+    } catch {}
     const gifUrl = open
       ? 'https://media1.tenor.com/m/Ciazvs6FzuAAAAAC/spongebob-open.gif'
       : 'https://media1.tenor.com/m/9Wq1jcXr_wUAAAAC/spongebob-are-you-open.gif';
