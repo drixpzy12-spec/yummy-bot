@@ -94,13 +94,18 @@ async function updateStatusGif(open) {
         .setImage(`attachment://${filename}`)
         .setColor(open ? 0x57F287 : 0xED4245)
         .setFooter({ text: open ? 'OPEN!' : 'CLOSED' });
-      // Only ping @everyone when opening (closing is silent per request)
-      const content = open ? '@everyone' : null;
-      const allowed = open ? { parse: ['everyone'] } : {};
-      const msg = await ch.send({ content, embeds: [embed], files: [attachment], allowedMentions: allowed }).catch(e=>{ console.log('[X] gif send attach failed', e.message); return null; });
-      if (msg) saveStatus(open, msg.id);
-      else saveStatus(open, null);
-      return;
+      // Only ping @everyone when opening — CLOSED is fully silent (no content, no mention)
+      if (open) {
+        const msg = await ch.send({ content: '@everyone', embeds: [embed], files: [attachment], allowedMentions: { parse: ['everyone'] } }).catch(e=>{ console.log('[X] gif send attach failed', e.message); return null; });
+        if (msg) saveStatus(open, msg.id);
+        else saveStatus(open, null);
+        return;
+      } else {
+        const msg = await ch.send({ embeds: [embed], files: [attachment] }).catch(e=>{ console.log('[X] gif send attach failed', e.message); return null; });
+        if (msg) saveStatus(open, msg.id);
+        else saveStatus(open, null);
+        return;
+      }
     } catch (e) {
       console.log('[X] gif fetch/attach failed', e.message, 'falling back to URL');
     }
@@ -110,9 +115,9 @@ async function updateStatusGif(open) {
       .setImage(gifUrl)
       .setColor(open ? 0x57F287 : 0xED4245)
       .setFooter({ text: open ? 'OPEN!' : 'CLOSED' });
-    const content2 = open ? '@everyone' : null;
-    const allowed2 = open ? { parse: ['everyone'] } : {};
-    const msg = await ch.send({ content: content2, embeds: [embed], allowedMentions: allowed2 }).catch(e=>{ console.log('[X] gif send fallback failed', e.message); return null; });
+    const msg = open
+      ? await ch.send({ content: '@everyone', embeds: [embed], allowedMentions: { parse: ['everyone'] } }).catch(e=>{ console.log('[X] gif send fallback failed', e.message); return null; })
+      : await ch.send({ embeds: [embed] }).catch(e=>{ console.log('[X] gif send fallback failed', e.message); return null; });
     if (msg) saveStatus(open, msg.id);
     else saveStatus(open, null);
   } catch(e){ console.log('[X] updateStatusGif', e.message); }
