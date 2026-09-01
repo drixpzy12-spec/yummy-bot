@@ -60,6 +60,11 @@ async function updateStatusGif(open) {
     let ch = null;
     try { ch = await guild.channels.fetch(STATUS_CHANNEL_ID); } catch {}
     if (!ch) ch = guild.channels.cache.get(STATUS_CHANNEL_ID);
+    if (!ch) ch = guild.channels.cache.find(c => c.name.includes('status'));
+    if (!ch) {
+      // try fresh fetch all
+      try { await guild.channels.fetch(); ch = guild.channels.cache.find(c => c.name.includes('status')); } catch {}
+    }
     if (!ch) { console.log('[X] status gif channel not found'); return; }
     if (statusGifMessageId) {
       try {
@@ -68,7 +73,7 @@ async function updateStatusGif(open) {
       } catch {}
       statusGifMessageId = null;
     }
-    // Cleanup any stale @everyone CLOSED messages left from before fix (Railway reset loses status.json)
+    // Cleanup any stale @everyone CLOSED messages left from before fix
     try {
       const recent = await ch.messages.fetch({ limit: 10 }).catch(()=>null);
       if (recent) {
@@ -345,17 +350,11 @@ async function createTicket(guild, user, dealValue, orderData) {
   const container = buildTicketContainer(deal, orderData, user, null);
 
   const pingIds = [...clockedIn];
-  const allowed = { users: [user.id, ...pingIds] };
-  // Only ping role if no one clocked in? No - clocked out means no ping, so don't add role
-  if (pingIds.length === 0) {
-    // no chef pings - just user
-  } else {
-    // pings are inside container via <@id> mentions, allowed via users
-  }
+  const uniqueUsers = [...new Set([user.id, ...pingIds])];
   await channel.send({
     components: [container],
     flags: MessageFlagsBitField.Flags.IsComponentsV2,
-    allowedMentions: { users: [user.id, ...pingIds] }
+    allowedMentions: { users: uniqueUsers }
   });
 
   return { channel, deal };
@@ -722,7 +721,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (stored) {
           const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
           const pingIds = [...clockedIn];
-          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: [stored.user.id, ...pingIds] } }).catch(()=>{});
+          const u = [...new Set([stored.user.id, ...pingIds])];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: u } }).catch(()=>{});
         }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed by ${interaction.user.tag}`);
@@ -839,7 +839,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           // Resend fresh claim prompt so chefs can press Claim again
           const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
           const pingIds2 = [...clockedIn];
-          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: [stored.user.id, ...pingIds2] } }).catch(()=>{});
+          const u2 = [...new Set([stored.user.id, ...pingIds2])];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: u2 } }).catch(()=>{});
         }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed via /unclaim by ${interaction.user.tag}`);
