@@ -337,51 +337,65 @@ function buildOrderModal(dealValue) {
 
 function buildTicketContainer(deal, orderData, user, claimedBy = null) {
   const container = new ContainerBuilder().setAccentColor(deal.color);
-
-  // Header
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## ${deal.emoji} ${deal.label}`)
-  );
+  // Header like direct order bot - YUMMY · ORDER SERVICE with animated thumbnail
+  const dealGifs = {
+    '10for30': 'https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif',
+    'doordash': 'https://media1.tenor.com/m/Ciazvs6FzuAAAAAC/spongebob-open.gif',
+    'ubereats': 'https://media1.tenor.com/m/TEx1ai0W_7MAAAAC/pizza-pizza-gif.gif'
+  };
+  const gifForDeal = dealGifs[deal.short] || dealGifs['10for30'];
+  const header = new SectionBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# YUMMY · ORDER SERVICE\n## ${deal.emoji} ${deal.label} is selected`))
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://ticket.gif').setDescription(deal.label));
+  container.addSectionComponents(header);
   const chefPings = getChefPings();
-  const pingLine = chefPings ? `Hey <@${user.id}> ${chefPings} — thanks for ordering!` : `Hey <@${user.id}> — thanks for ordering!`;
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(pingLine)
-  );
+  const pingLine = chefPings ? `Hey <@${user.id}> ${chefPings}` : `Hey <@${user.id}>`;
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`${pingLine} — thanks for ordering!`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-
-  // Order details
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Restaurant locked in.**`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`📍 Add the recipient and delivery address to keep moving.`));
   if (orderData) {
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📋 Order Details`));
     const lines = [];
-    if (orderData.address) lines.push(`**Address:** ${orderData.address}`);
-    if (orderData.store) lines.push(`**Store:** ${orderData.store}`);
-    if (orderData.total) lines.push(`**Total:** ${orderData.total}`);
-    if (orderData.grouplink) lines.push(`**Group Link:** ${orderData.grouplink}`);
-    if (orderData.payment) lines.push(`**Payment:** ${orderData.payment}`);
-    if (lines.length) container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+    if (orderData.address) lines.push(`📍 **Address:** ${orderData.address}`);
+    if (orderData.store) lines.push(`🏪 **Store:** ${orderData.store}`);
+    if (orderData.total) lines.push(`💰 **Total:** ${orderData.total}`);
+    if (orderData.grouplink) lines.push(`🔗 **Group Link:** ${orderData.grouplink}`);
+    if (orderData.payment) lines.push(`💳 **Payment:** ${orderData.payment}`);
+    if (lines.length) {
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.join('\n')));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Accepted: \`Street|City|ST|ZIP\` or \`Street, City, ST ZIP\``));
+    }
   }
-
-  // Status / claimed
   if (claimedBy) {
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ **Claimed by <@${claimedBy}>** — this chef will assist you 1:1.`));
   } else {
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`*A chef will claim your ticket shortly. — User ID: \`${user.id}\`*`));
   }
-
-  // Buttons inside container (Components V2)
   const row = new ActionRowBuilder().addComponents(
     claimedBy
       ? new ButtonBuilder().setCustomId('unclaim_ticket').setLabel('Unclaim').setStyle(ButtonStyle.Secondary).setEmoji('↩️')
-      : new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim').setStyle(ButtonStyle.Success).setEmoji('🙋'),
-    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Danger).setEmoji('🔒')
+      : new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Success).setEmoji('🙋'),
+    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Secondary).setEmoji('✕')
   );
   container.addActionRowComponents(row);
-
-  // Footer time
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Ticket for ${user.tag} • <t:${Math.floor(Date.now()/1000)}:R>`));
-
   return container;
+}
+async function getTicketGifAttachment(dealShort) {
+  const map = {
+    '10for30': 'https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif',
+    'doordash': 'https://media1.tenor.com/m/Ciazvs6FzuAAAAAC/spongebob-open.gif',
+    'ubereats': 'https://media1.tenor.com/m/TEx1ai0W_7MAAAAC/pizza-pizza-gif.gif'
+  };
+  const url = map[dealShort] || map['10for30'];
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return new AttachmentBuilder(buf, { name: 'ticket.gif' });
+  } catch { return null; }
 }
 
 async function createTicket(guild, user, dealValue, orderData) {
@@ -414,12 +428,14 @@ async function createTicket(guild, user, dealValue, orderData) {
   ticketStore.set(channel.id, { deal, orderData, user });
 
   const container = buildTicketContainer(deal, orderData, user, null);
-
+  const gifAtt = await getTicketGifAttachment(deal.short);
   const pingIds = [...clockedIn];
   const uniqueUsers = [...new Set([user.id, ...pingIds])];
+  const files = gifAtt ? [gifAtt] : [];
   await channel.send({
     components: [container],
     flags: MessageFlagsBitField.Flags.IsComponentsV2,
+    files,
     allowedMentions: { users: uniqueUsers }
   });
 
@@ -427,29 +443,17 @@ async function createTicket(guild, user, dealValue, orderData) {
 }
 
 function buildPanel() {
-  const container = new ContainerBuilder().setAccentColor(0xF39C12);
-
-  // Header section with text
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`## 🍔 Yummy Orders`)
-  );
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`Select your deal below to open a **private ticket** with our chefs. Your ticket will be between you and staff only.`)
-  );
+  const container = new ContainerBuilder().setAccentColor(0xFF8C00);
+  const header = new SectionBuilder()
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# YUMMY · ORDER SERVICE\n## 🍔 Yummy Orders`))
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://panel.gif').setDescription('Yummy'));
+  container.addSectionComponents(header);
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Select your deal below to open a **private ticket** with our chefs. Your ticket will be between you and staff only.`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-
-  // Deals showcase
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`**🥬 10 FOR 30 DEALS**\nBest value bundle — 10 items for $30`)
-  );
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`**🚗 DOORDASH**\nGroup order discount — share your group link`)
-  );
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`**🛵 Uber Eats**\nFood delivery — Uber Eats orders`)
-  );
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🥬 10 FOR 30 DEALS**\nBest value bundle — 10 items for $30`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🚗 DOORDASH**\nGroup order discount — share your group link`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🛵 Uber Eats**\nFood delivery — Uber Eats orders`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-
   const menu = new StringSelectMenuBuilder()
     .setCustomId('ticket_select')
     .setPlaceholder('🛒 Choose your deal...')
@@ -460,12 +464,17 @@ function buildPanel() {
     );
   const row = new ActionRowBuilder().addComponents(menu);
   container.addActionRowComponents(row);
-
-  container.addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(`-# Select a deal to get started • Tickets are private`)
-  );
-
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 📍 Select a deal to get started • Tickets are private`));
   return { components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 };
+}
+async function getPanelGifAttachment() {
+  try {
+    const url = 'https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif';
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return new AttachmentBuilder(buf, { name: 'panel.gif' });
+  } catch { return null; }
 }
 
 function buildFaqContainer() {
@@ -815,7 +824,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
           const pingIds = [...clockedIn];
           const u = [...new Set([stored.user.id, ...pingIds])];
-          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: u } }).catch(()=>{});
+          const gifAtt2b = await getTicketGifAttachment(stored.deal.short);
+          const files2b = gifAtt2b ? [gifAtt2b] : [];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, files: files2b, allowedMentions: { users: u } }).catch(()=>{});
         }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed by ${interaction.user.tag}`);
@@ -840,7 +851,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const panel = buildPanel();
       const targetChannel = interaction.channel;
-      await targetChannel.send(panel);
+      const gifAtt = await getPanelGifAttachment();
+      const files = gifAtt ? [gifAtt] : [];
+      await targetChannel.send({ ...panel, files });
       await interaction.reply({ content: `✅ Panel sent in <#${targetChannel.id}>`, ephemeral: true });
       return;
     }
@@ -937,7 +950,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
           const pingIds2 = [...clockedIn];
           const u2 = [...new Set([stored.user.id, ...pingIds2])];
-          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, allowedMentions: { users: u2 } }).catch(()=>{});
+          const gifAtt3 = await getTicketGifAttachment(stored.deal.short);
+          const files3 = gifAtt3 ? [gifAtt3] : [];
+          await interaction.channel.send({ components: [fresh], flags: MessageFlagsBitField.Flags.IsComponentsV2, files: files3, allowedMentions: { users: u2 } }).catch(()=>{});
         }
       } catch {}
       console.log(`[↩️] Ticket ${interaction.channel.name} unclaimed via /unclaim by ${interaction.user.tag}`);
@@ -1305,7 +1320,9 @@ client.on(Events.MessageCreate, async (message) => {
       return message.reply('❌ Only Admins can use `!panel`.');
     }
     const panel = buildPanel();
-    await message.channel.send(panel);
+    const gifAtt2 = await getPanelGifAttachment();
+    const files2 = gifAtt2 ? [gifAtt2] : [];
+    await message.channel.send({ ...panel, files: files2 });
     await message.delete().catch(()=>{});
   }
 });
