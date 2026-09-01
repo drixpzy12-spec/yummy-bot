@@ -943,7 +943,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🟢 / 🔴 Open & Close\n` +
-        `• \`/open\` — Set restaurant to **open**, allow tickets, rename status to \`🟢-status\`, send open gif with @everyone\n` +
+        `• \`/open\` — Set restaurant to **open**, allow tickets, rename status to \`🟢-status\`, send open gif\n` +
         `• \`/closed\` — Set to **closed**, block new tickets (replies *Restaurant is currently closed*), rename to \`🔴-status\`, send closed gif\n` +
         `• Requires Chef+ or Manage Server`
       ));
