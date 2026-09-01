@@ -23,6 +23,7 @@ const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1544192690038640740'
 
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 const STATUS_FILE = path.join(__dirname, 'status.json');
 let isOpen = true;
 let statusGifMessageId = null;
@@ -71,6 +72,23 @@ function countClaimedBy(uid) {
   return c;
 }
 const ratingStore = new Map(); // ratingMessageId -> customerId
+// Vouch points
+const VOUCH_POINTS_FILE = path.join(__dirname, 'vouch_points.json');
+let vouchPoints = {};
+try { if (fs.existsSync(VOUCH_POINTS_FILE)) vouchPoints = JSON.parse(fs.readFileSync(VOUCH_POINTS_FILE, 'utf8')); } catch {}
+function saveVouchPoints() { try { fs.writeFileSync(VOUCH_POINTS_FILE, JSON.stringify(vouchPoints, null, 2)); } catch {} }
+function addVouchPoints(uid, pts = 10) { if (!vouchPoints[uid]) vouchPoints[uid] = 0; vouchPoints[uid] += pts; saveVouchPoints(); return vouchPoints[uid]; }
+async function watermarkBuffer(buf) {
+  try {
+    const image = sharp(buf);
+    const meta = await image.metadata();
+    const w = meta.width || 600;
+    const h = meta.height || 400;
+    const fontSize = Math.round(Math.min(w, h) / 6);
+    const svg = `<svg width="${w}" height="${h}"><text x="50%" y="50%" font-family="Arial Black, sans-serif" font-size="${fontSize}" fill="white" opacity="0.32" text-anchor="middle" dominant-baseline="middle" transform="rotate(-22 ${w/2} ${h/2})">Yummy</text></svg>`;
+    return await image.composite([{ input: Buffer.from(svg), gravity: 'centre' }]).jpeg({ quality: 90 }).toBuffer();
+  } catch (e) { console.log('[X] watermark', e.message); return buf; }
+}
 // Daily orders tracking for /today
 const DAILY_FILE = path.join(__dirname, 'daily_orders.json');
 let dailyData = {};
@@ -566,6 +584,11 @@ const commands = [
   new SlashCommandBuilder()
     .setName('today')
     .setDescription('Show orders completed today')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('vouch')
+    .setDescription('Vouch with a photo - earn 10 points')
+    .addAttachmentOption(o => o.setName('photo').setDescription('Upload your vouch photo').setRequired(true))
     .toJSON(),
 ];
 
@@ -1195,6 +1218,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Yummy`));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
+      return;
+    }
+
+    // === SLASH: /vouch ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'vouch') {
+      await interaction.deferReply({ ephemeral: true });
+      const photo = interaction.options.getAttachment('photo');
+      if (!photo || !photo.contentType?.startsWith('image/')) {
+        await interaction.editReply({ content: '❌ Please upload a valid image.' });
+        return;
+      }
+      try {
+        const res = await fetch(photo.url);
+        if (!res.ok) throw new Error('fetch failed');
+        const buf = Buffer.from(await res.arrayBuffer());
+        const watermarked = await watermarkBuffer(buf);
+        const ext = photo.name?.split('.').pop() || 'png';
+        const filename = `vouch_${Date.now()}.${ext.includes('png') ? 'png' : 'jpg'}`;
+        const attachment = new AttachmentBuilder(watermarked, { name: filename });
+        // Build vouch container like Cracky bot: username Vouch + image
+        const vouchContainer = new ContainerBuilder().setAccentColor(0x2ECC71);
+        vouchContainer.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**${interaction.user.username} Vouch**`));
+        const gallery = new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(`attachment://${filename}`));
+        vouchContainer.addMediaGalleryComponents(gallery);
+        // Send to channel where command was used (or vouches channel if you want)
+        await interaction.channel.send({ components: [vouchContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2, files: [attachment] });
+        // Points like screenshot: @user you have earned 10 points!
+        const newPoints = addVouchPoints(interaction.user.id, 10);
+        const pointsContainer = new ContainerBuilder().setAccentColor(0x9B59B6)
+          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🎉 <@${interaction.user.id}> you have earned **10 points!** (Total: \`${newPoints}\`)`));
+        await interaction.channel.send({ components: [pointsContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+        await interaction.editReply({ content: `✅ Vouch posted! You now have \`${newPoints} points\`.` });
+      } catch (e) {
+        console.log('[X] vouch', e.message);
+        await interaction.editReply({ content: `❌ Failed to process vouch: ${e.message}` });
+      }
       return;
     }
 
