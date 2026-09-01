@@ -53,6 +53,22 @@ function getChefPings() {
   if (clockedIn.size === 0) return '';
   return [...clockedIn].map(id => `<@${id}>`).join(' ');
 }
+// Balances for chefs - $2 per complete
+const BALANCE_FILE = path.join(__dirname, 'chef_balances.json');
+let chefBalances = {};
+try {
+  if (fs.existsSync(BALANCE_FILE)) chefBalances = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
+} catch {}
+function saveBalances() { try { fs.writeFileSync(BALANCE_FILE, JSON.stringify(chefBalances, null, 2)); } catch {} }
+function getChefBalance(uid) {
+  if (!chefBalances[uid]) chefBalances[uid] = { balance: 0, totalOrders: 0 };
+  return chefBalances[uid];
+}
+function countClaimedBy(uid) {
+  let c = 0;
+  for (const v of claimedTickets.values()) if (v === uid) c++;
+  return c;
+}
 async function updateStatusGif(open) {
   try {
     const guild = client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
@@ -501,6 +517,14 @@ const commands = [
     .setName('chefs')
     .setDescription('How to use the bot for chefs and admins')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('complete')
+    .setDescription('Mark order complete - adds $2 to balance (Chef only)')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('bal')
+    .setDescription('Check your chef balance (Chef only)')
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -599,13 +623,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const channelId = interaction.channelId;
       if (claimedTickets.has(channelId)) {
         const claimedBy = claimedTickets.get(channelId);
-        // If ticket was unclaimed (moved back to Tickets) but Map stale, clear it
         if (interaction.channel.parentId === TICKET_CATEGORY_ID) {
           claimedTickets.delete(channelId);
         } else {
           await interaction.reply({ content: `⚠️ Already claimed by <@${claimedBy}>`, ephemeral: true });
           return;
         }
+      }
+
+      if (countClaimedBy(interaction.user.id) >= 3) {
+        await interaction.reply({ content: '❌ You can only claim 3 tickets at a time. Do `/complete` or `/unclaim` to free a slot.', ephemeral: true });
+        return;
       }
 
       claimedTickets.set(channelId, interaction.user.id);
@@ -775,6 +803,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.reply({ content: `⚠️ Already claimed by <@${cBy}>`, ephemeral: true });
           return;
         }
+      }
+      if (countClaimedBy(interaction.user.id) >= 3) {
+        await interaction.reply({ content: '❌ You can only claim 3 tickets at a time. Do `/complete` or `/unclaim` to free a slot.', ephemeral: true });
+        return;
       }
       claimedTickets.set(interaction.channelId, interaction.user.id);
       const slashClaimContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
@@ -963,6 +995,114 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `• \`/close\` — Close & delete current ticket`
       ));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /complete ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'complete') {
+      if (!hasChefPermission(interaction.member, interaction.guild)) {
+        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> can use `/complete`.', ephemeral: true });
+        return;
+      }
+      const chId = interaction.channelId;
+      if (!claimedTickets.has(chId)) {
+        await interaction.reply({ content: '⚠️ This ticket is not claimed. Claim it first.', ephemeral: true });
+        return;
+      }
+      const claimedBy = claimedTickets.get(chId);
+      if (claimedBy !== interaction.user.id && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can complete this.`, ephemeral: true });
+        return;
+      }
+      // Get ticket data
+      const stored = ticketStore.get(chId);
+      let customerId = null;
+      let customerTag = 'Customer';
+      if (stored?.user) { customerId = stored.user.id; customerTag = stored.user.tag; }
+      else {
+        const m = interaction.channel.topic?.match(/\b\d{17,20}\b/);
+        if (m) customerId = m[0];
+      }
+      const customerMention = customerId ? `<@${customerId}>` : '@Unknown';
+      const chefMention = `<@${interaction.user.id}>`;
+      // Update balance
+      const bal = getChefBalance(interaction.user.id);
+      bal.balance += 2;
+      bal.totalOrders += 1;
+      saveBalances();
+      // Free claim slot
+      claimedTickets.delete(chId);
+      // Restore chef perms so they can claim again (keep channel open for rating)
+      try { await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{}); } catch {}
+      const totalOrders = bal.totalOrders;
+      const newBal = bal.balance.toFixed(2);
+      // Order Completed container (like screenshot)
+      const completed = new ContainerBuilder().setAccentColor(0x57F287);
+      completed.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Order Completed`));
+      completed.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      completed.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**Service:** Service\n` +
+        `**Chef:** ${chefMention}\n` +
+        `**Customer:** ${customerMention}\n` +
+        `**Status:** Marked complete`
+      ));
+      completed.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      completed.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**Chef Overview**\n` +
+        `↳ **Total Orders:** \`${totalOrders} orders\`\n` +
+        `↳ **Fee Earned:** \`$2.00\`\n` +
+        `↳ **New Balance:** \`$${newBal}\``
+      ));
+      completed.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Completed by ${interaction.user.username}`));
+      // Rating prompt container (like screenshot)
+      const rating = new ContainerBuilder().setAccentColor(0xFFD700);
+      const chefDisplay = interaction.user.username;
+      rating.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ⭐ Rate your chef`));
+      rating.addTextDisplayComponents(new TextDisplayBuilder().setContent(`${customerMention}, how was your experience with **${chefDisplay}**?`));
+      const rateRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('rate_1').setLabel('1').setStyle(ButtonStyle.Danger).setEmoji('⭐'),
+        new ButtonBuilder().setCustomId('rate_2').setLabel('2').setStyle(ButtonStyle.Danger).setEmoji('⭐'),
+        new ButtonBuilder().setCustomId('rate_3').setLabel('3').setStyle(ButtonStyle.Secondary).setEmoji('⭐'),
+        new ButtonBuilder().setCustomId('rate_4').setLabel('4').setStyle(ButtonStyle.Primary).setEmoji('⭐'),
+        new ButtonBuilder().setCustomId('rate_5').setLabel('5').setStyle(ButtonStyle.Success).setEmoji('⭐')
+      );
+      rating.addActionRowComponents(rateRow);
+      await interaction.reply({ components: [completed], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+      await interaction.channel.send({ components: [rating], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+      console.log(`[✔] /complete by ${interaction.user.tag} +$2 bal $${newBal} total ${totalOrders}`);
+      return;
+    }
+
+    // === SLASH: /bal ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'bal') {
+      if (!hasChefPermission(interaction.member, interaction.guild)) {
+        await interaction.reply({ content: '❌ Only Chefs can check balance.', ephemeral: true });
+        return;
+      }
+      const bal = getChefBalance(interaction.user.id);
+      const container = new ContainerBuilder().setAccentColor(0x2ECC71)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💰 Your Balance`))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+          `**Chef:** <@${interaction.user.id}>\n` +
+          `**Total Orders:** \`${bal.totalOrders}\`\n` +
+          `**Balance Owed:** \`$${bal.balance.toFixed(2)}\` • $2 per order`
+        ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === BUTTON: Rate 1-5 ===
+    if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
+      const stars = interaction.customId.split('_')[1];
+      const thank = new ContainerBuilder().setAccentColor(0x57F287)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`⭐ Thanks for rating **${stars}/5**!`));
+      await interaction.reply({ components: [thank], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      // disable rating buttons
+      try {
+        const disabled = new ContainerBuilder().setAccentColor(0xFFD700)
+          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`⭐ Rated **${stars}/5** by <@${interaction.user.id}>`));
+        await interaction.message.edit({ components: [disabled], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+      } catch {}
       return;
     }
 
