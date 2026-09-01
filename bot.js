@@ -26,6 +26,23 @@ const path = require('path');
 const sharp = require('sharp');
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+// Postgres for persistence on Railway (falls back to files locally)
+const { Pool } = require('pg');
+const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }) : null;
+if (pool) pool.on('error', e => console.log('[DB] pool error', e.message));
+async function dbInit() {
+  if (!pool) return;
+  try { await pool.query(`CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value JSONB)`); console.log('[DB] kv_store ready'); } catch(e){ console.log('[DB] init fail', e.message); }
+}
+async function dbGet(key, fallback) {
+  if (!pool) return fallback;
+  try { const r = await pool.query('SELECT value FROM kv_store WHERE key=$1', [key]); if (r.rows[0]) return r.rows[0].value; } catch(e){ console.log('[DB] get',key,e.message); }
+  return fallback;
+}
+async function dbSet(key, value) {
+  if (!pool) return;
+  try { await pool.query('INSERT INTO kv_store (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2', [key, JSON.stringify(value)]); } catch(e){ console.log('[DB] set',key,e.message); }
+}
 const STATUS_FILE = path.join(DATA_DIR, 'status.json');
 let isOpen = true;
 let statusGifMessageId = null;
@@ -40,6 +57,7 @@ function saveStatus(open, gifId = statusGifMessageId) {
   isOpen = open;
   if (gifId !== undefined) statusGifMessageId = gifId;
   try { fs.writeFileSync(STATUS_FILE, JSON.stringify({ open, gifMessageId: statusGifMessageId }, null, 2)); } catch {}
+  dbSet('status', { open, gifMessageId: statusGifMessageId });
 }
 // Clock in/out for chefs
 const CLOCK_FILE = path.join(DATA_DIR, 'clock.json');
@@ -52,6 +70,7 @@ try {
 } catch {}
 function saveClock() {
   try { fs.writeFileSync(CLOCK_FILE, JSON.stringify({ clockedIn: [...clockedIn] }, null, 2)); } catch {}
+  dbSet('clock', { clockedIn: [...clockedIn] });
 }
 function getChefPings() {
   if (clockedIn.size === 0) return '';
@@ -63,7 +82,7 @@ let chefBalances = {};
 try {
   if (fs.existsSync(BALANCE_FILE)) chefBalances = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
 } catch {}
-function saveBalances() { try { fs.writeFileSync(BALANCE_FILE, JSON.stringify(chefBalances, null, 2)); } catch {} }
+function saveBalances() { try { fs.writeFileSync(BALANCE_FILE, JSON.stringify(chefBalances, null, 2)); } catch {} dbSet('chef_balances', chefBalances); }
 function getChefBalance(uid) {
   if (!chefBalances[uid]) chefBalances[uid] = { balance: 0, totalOrders: 0 };
   return chefBalances[uid];
@@ -92,7 +111,7 @@ const ratingStore = new Map(); // ratingMessageId -> customerId
 const VOUCH_POINTS_FILE = path.join(DATA_DIR, 'vouch_points.json');
 let vouchPoints = {};
 try { if (fs.existsSync(VOUCH_POINTS_FILE)) vouchPoints = JSON.parse(fs.readFileSync(VOUCH_POINTS_FILE, 'utf8')); } catch {}
-function saveVouchPoints() { try { fs.writeFileSync(VOUCH_POINTS_FILE, JSON.stringify(vouchPoints, null, 2)); } catch {} }
+function saveVouchPoints() { try { fs.writeFileSync(VOUCH_POINTS_FILE, JSON.stringify(vouchPoints, null, 2)); } catch {} dbSet('vouch_points', vouchPoints); }
 function addVouchPoints(uid, pts = 10) { if (!vouchPoints[uid]) vouchPoints[uid] = 0; vouchPoints[uid] += pts; saveVouchPoints(); return vouchPoints[uid]; }
 async function watermarkBuffer(buf) {
   try {
@@ -109,7 +128,7 @@ async function watermarkBuffer(buf) {
 const DAILY_FILE = path.join(DATA_DIR, 'daily_orders.json');
 let dailyData = {};
 try { if (fs.existsSync(DAILY_FILE)) dailyData = JSON.parse(fs.readFileSync(DAILY_FILE, 'utf8')); } catch {}
-function saveDaily() { try { fs.writeFileSync(DAILY_FILE, JSON.stringify(dailyData, null, 2)); } catch {} }
+function saveDaily() { try { fs.writeFileSync(DAILY_FILE, JSON.stringify(dailyData, null, 2)); } catch {} dbSet('daily_orders', dailyData); }
 function formatHour(h) { const ampm = h >= 12 ? 'PM' : 'AM'; const hr = h % 12 || 12; return `${hr} ${ampm}`; }
 function logOrderToday(chefId) {
   const dateStr = new Date().toISOString().split('T')[0];
@@ -257,7 +276,7 @@ try {
     for (const [k,v] of Object.entries(d)) claimedTickets.set(k,v);
   }
 } catch {}
-function saveClaimed() { try { fs.writeFileSync(CLAIMED_FILE, JSON.stringify(Object.fromEntries(claimedTickets), null, 2)); } catch {} }
+function saveClaimed() { try { fs.writeFileSync(CLAIMED_FILE, JSON.stringify(Object.fromEntries(claimedTickets), null, 2)); } catch {} dbSet('claimed', Object.fromEntries(claimedTickets)); }
 const ticketStore = new Map(); // channelId -> { deal, orderData, user }
 
 function hasChefPermission(member, guild) {
@@ -653,6 +672,25 @@ client.once(Events.ClientReady, async () => {
   if (TICKET_CATEGORY_ID) console.log(`[i] Ticket Category: ${TICKET_CATEGORY_ID}`);
   if (CLAIMED_CATEGORY_ID) console.log(`[i] Claimed Category: ${CLAIMED_CATEGORY_ID}`);
   console.log(`[i] Status Channel: ${STATUS_CHANNEL_ID} - currently ${isOpen ? '🟢 OPEN' : '🔴 CLOSED'}`);
+  // Load persisted data from Postgres if available (Railway)
+  await dbInit();
+  if (pool) {
+    try {
+      const s = await dbGet('status', null);
+      if (s) { isOpen = s.open; statusGifMessageId = s.gifMessageId; }
+      const c = await dbGet('clock', null);
+      if (c?.clockedIn) { clockedIn.clear(); c.clockedIn.forEach(id=>clockedIn.add(id)); }
+      const b = await dbGet('chef_balances', null);
+      if (b) chefBalances = b;
+      const d = await dbGet('daily_orders', null);
+      if (d) dailyData = d;
+      const v = await dbGet('vouch_points', null);
+      if (v) vouchPoints = v;
+      const cl = await dbGet('claimed', null);
+      if (cl) { claimedTickets.clear(); for (const [k,vv] of Object.entries(cl)) claimedTickets.set(k,vv); }
+      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size}`);
+    } catch(e){ console.log('[DB] load fail', e.message); }
+  }
   console.log(`[i] Clocked in chefs: ${clockedIn.size} ${[...clockedIn].join(', ') || '(none)'}`);
   await registerCommands(client.guilds.cache);
   await updateStatusChannel(isOpen);
