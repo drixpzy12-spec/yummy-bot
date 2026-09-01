@@ -528,8 +528,9 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('paid')
-    .setDescription('Clear chef balances (Crown role only)')
-    .addUserOption(o => o.setName('chef').setDescription('Chef to clear (leave empty to clear all)').setRequired(false))
+    .setDescription('Mark chef as paid (Crown role only) - /paid @user <amount>')
+    .addUserOption(o => o.setName('user').setDescription('Chef to pay').setRequired(true))
+    .addNumberOption(o => o.setName('amount').setDescription('How much you paid').setRequired(true).setMinValue(0.01))
     .toJSON(),
 ];
 
@@ -1101,33 +1102,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: `❌ Only <@&${PAID_ROLE_ID}> or higher can use \`/paid\`.`, ephemeral: true });
         return;
       }
-      const targetUser = interaction.options.getUser('chef');
-      let cleared = 0;
-      let totalCleared = 0;
-      if (targetUser) {
-        const foundId = targetUser.id;
-        if (!chefBalances[foundId] || chefBalances[foundId].balance === 0) {
-          await interaction.reply({ content: `⚠️ No balance for <@${foundId}>.`, ephemeral: true });
-          return;
-        }
-        totalCleared = chefBalances[foundId].balance;
-        chefBalances[foundId].balance = 0;
-        saveBalances();
-        const container = new ContainerBuilder().setAccentColor(0x57F287)
-          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Cleared **$${totalCleared.toFixed(2)}** for <@${foundId}> — balance now $0.00`));
-        await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
-        return;
-      } else {
-        // clear all
-        for (const id of Object.keys(chefBalances)) {
-          if (chefBalances[id].balance > 0) { totalCleared += chefBalances[id].balance; chefBalances[id].balance = 0; cleared++; }
-        }
-        saveBalances();
-        const container = new ContainerBuilder().setAccentColor(0x57F287)
-          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Cleared **${cleared}** chefs — total **$${totalCleared.toFixed(2)}** reset to $0.00`));
-        await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      const targetUser = interaction.options.getUser('user');
+      const amount = interaction.options.getNumber('amount');
+      const foundId = targetUser.id;
+      const bal = getChefBalance(foundId);
+      if (bal.balance <= 0) {
+        await interaction.reply({ content: `⚠️ <@${foundId}> has no balance ($0.00).`, ephemeral: true });
         return;
       }
+      if (amount > bal.balance + 0.001) {
+        await interaction.reply({ content: `⚠️ <@${foundId}> only owes \`$${bal.balance.toFixed(2)}\` — can't pay \`$${amount.toFixed(2)}\`.`, ephemeral: true });
+        return;
+      }
+      bal.balance = Math.max(0, bal.balance - amount);
+      saveBalances();
+      const container = new ContainerBuilder().setAccentColor(0x57F287)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(
+          `✅ Paid **$${amount.toFixed(2)}** to <@${foundId}>\n` +
+          `**Remaining Balance:** \`$${bal.balance.toFixed(2)}\` • Total Orders: \`${bal.totalOrders}\``
+        ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
     }
 
     // === BUTTON: Rate 1-5 ===
