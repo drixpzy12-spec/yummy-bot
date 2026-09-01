@@ -695,6 +695,12 @@ const commands = [
     .addNumberOption(o => o.setName('amount').setDescription('Amount to add').setRequired(true).setMinValue(0.01))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('addorder')
+    .setDescription('Add orders to today (Crown/Admin only)')
+    .addUserOption(o => o.setName('chef').setDescription('Chef').setRequired(true))
+    .addIntegerOption(o => o.setName('amount').setDescription('Orders to add').setRequired(true).setMinValue(1).setMaxValue(100))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('today')
     .setDescription('Show orders completed today')
     .toJSON(),
@@ -754,43 +760,7 @@ client.once(Events.ClientReady, async () => {
   }
   await loadFromDiscord().catch(()=>{});
   console.log(`[DATA] after Discord load balances=${Object.keys(chefBalances).length} totalOrders=${Object.values(chefBalances).reduce((a,b)=>a+(b.totalOrders||0),0)}`);
-  // One-time restore for star 7 / Yo Fastest Chef 6 after wipe (remove after next deploy if you want)
-  try {
-    const totalOrdersNow = Object.values(chefBalances).reduce((a,b)=>a+(b.totalOrders||0),0);
-    const todayStatsNow = getTodayStats();
-    if (totalOrdersNow === 0 && todayStatsNow.total === 0) {
-      await client.guilds.fetch();
-      const guild = client.guilds.cache.get(GUILD_ID);
-      if (guild) {
-        await guild.members.fetch().catch(()=>{});
-        const starMember = guild.members.cache.find(m => m.displayName.toLowerCase().includes('star') || m.user.username.toLowerCase().includes('star'));
-        const yoMember = guild.members.cache.find(m => m.displayName.toLowerCase().includes('yo fastest') || m.displayName.toLowerCase().includes('fastest') || m.user.username.toLowerCase().includes('fastest'));
-        if (starMember) {
-          const b = getChefBalance(starMember.id);
-          if (b.totalOrders < 7) { b.totalOrders = 7; b.balance = 14; }
-          console.log(`[RESTORE] star ${starMember.user.tag} -> 7 / $14`);
-        }
-        if (yoMember) {
-          const b2 = getChefBalance(yoMember.id);
-          if (b2.totalOrders < 6) { b2.totalOrders = 6; b2.balance = 12; }
-          console.log(`[RESTORE] yo fastest ${yoMember.user.tag} -> 6 / $12`);
-        }
-        if (starMember || yoMember) {
-          saveBalances();
-          // also restore today's daily orders
-          const todayStr = new Date().toISOString().split('T')[0];
-          if (!dailyData[todayStr] || dailyData[todayStr].orders.length === 0) {
-            dailyData[todayStr] = { orders: [] };
-            const hour = new Date().getHours();
-            if (starMember) for(let i=0;i<7;i++) dailyData[todayStr].orders.push({ chefId: starMember.id, timestamp: Date.now(), hour });
-            if (yoMember) for(let i=0;i<6;i++) dailyData[todayStr].orders.push({ chefId: yoMember.id, timestamp: Date.now(), hour });
-            saveDaily();
-            console.log(`[RESTORE] daily ${todayStr} -> star 7 + yo 6`);
-          }
-        }
-      }
-    }
-  } catch(e){ console.log('[RESTORE] fail', e.message); }
+
   console.log(`[i] Clocked in chefs: ${clockedIn.size} ${[...clockedIn].join(', ') || '(none)'}`);
   await registerCommands(client.guilds.cache);
   await updateStatusChannel(isOpen);
@@ -868,8 +838,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
+      const isExempt = interaction.member.roles.cache.has(PAID_ROLE_ID) || (interaction.guild.roles.cache.get(PAID_ROLE_ID) && interaction.member.roles.highest.position >= interaction.guild.roles.cache.get(PAID_ROLE_ID).position);
       const curClaimed = countClaimedBy(interaction.user.id);
-      if (curClaimed >= 3) {
+      if (!isExempt && curClaimed >= 3) {
         await interaction.reply({ content: `❌ You have \`${curClaimed}/3\` tickets claimed. Do \`/complete\` or \`/unclaim\` to free a slot.`, ephemeral: true });
         return;
       }
@@ -1050,8 +1021,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
       }
+      const isExempt2 = interaction.member.roles.cache.has(PAID_ROLE_ID) || (interaction.guild.roles.cache.get(PAID_ROLE_ID) && interaction.member.roles.highest.position >= interaction.guild.roles.cache.get(PAID_ROLE_ID).position);
       const curClaimed2 = countClaimedBy(interaction.user.id);
-      if (curClaimed2 >= 3) {
+      if (!isExempt2 && curClaimed2 >= 3) {
         await interaction.reply({ content: `❌ You have \`${curClaimed2}/3\` tickets claimed. Do \`/complete\` or \`/unclaim\` to free a slot.`, ephemeral: true });
         return;
       }
@@ -1408,6 +1380,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `✅ Paid **$${amount.toFixed(2)}** to <@${foundId}>\n` +
           `**Remaining Balance:** \`$${bal.balance.toFixed(2)}\` • Total Orders: \`${bal.totalOrders}\``
         ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /addorder ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'addorder') {
+      const hasPaidRole = interaction.member.roles.cache.has(PAID_ROLE_ID) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      const paidRole = interaction.guild.roles.cache.get(PAID_ROLE_ID);
+      const isHigher = paidRole ? interaction.member.roles.highest.position >= paidRole.position : false;
+      if (!hasPaidRole && !isHigher) {
+        await interaction.reply({ content: `❌ Only <@&${PAID_ROLE_ID}> or higher can use \`/addorder\`.`, ephemeral: true });
+        return;
+      }
+      const target = interaction.options.getUser('chef');
+      const amount = interaction.options.getInteger('amount');
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (!dailyData[todayStr]) dailyData[todayStr] = { orders: [] };
+      for (let i=0; i<amount; i++) dailyData[todayStr].orders.push({ chefId: target.id, timestamp: Date.now(), hour: new Date().getHours() });
+      const bal = getChefBalance(target.id);
+      bal.totalOrders += amount;
+      saveDaily();
+      saveBalances();
+      const container = new ContainerBuilder().setAccentColor(0x57F287)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Added **${amount}** orders to <@${target.id}> for today. Total now \`${getTodayStats().total}\``));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
