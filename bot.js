@@ -688,6 +688,13 @@ const commands = [
     .addNumberOption(o => o.setName('amount').setDescription('How much you paid').setRequired(true).setMinValue(0.01))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('addbal')
+    .setDescription('Add balance to a chef (Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addUserOption(o => o.setName('chef').setDescription('Chef to add to').setRequired(true))
+    .addNumberOption(o => o.setName('amount').setDescription('Amount to add').setRequired(true).setMinValue(0.01))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('today')
     .setDescription('Show orders completed today')
     .toJSON(),
@@ -1313,6 +1320,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `**Total Orders:** \`${bal.totalOrders}\`\n` +
           `**Balance Owed:** \`$${bal.balance.toFixed(2)}\` • $2 per order`
         ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /addbal ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'addbal') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: '❌ Only **Admins** can use `/addbal`.', ephemeral: true });
+        return;
+      }
+      const target = interaction.options.getUser('chef');
+      const amount = interaction.options.getNumber('amount');
+      const bal = getChefBalance(target.id);
+      bal.balance += amount;
+      bal.totalOrders += Math.round(amount / 2); // keep orders in sync ($2/order)
+      saveBalances();
+      const container = new ContainerBuilder().setAccentColor(0x57F287)
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Added **$${amount.toFixed(2)}** to <@${target.id}>\n**New Balance:** \`$${bal.balance.toFixed(2)}\` • Total Orders: \`${bal.totalOrders}\``));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
