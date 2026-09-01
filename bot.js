@@ -754,6 +754,43 @@ client.once(Events.ClientReady, async () => {
   }
   await loadFromDiscord().catch(()=>{});
   console.log(`[DATA] after Discord load balances=${Object.keys(chefBalances).length} totalOrders=${Object.values(chefBalances).reduce((a,b)=>a+(b.totalOrders||0),0)}`);
+  // One-time restore for star 7 / Yo Fastest Chef 6 after wipe (remove after next deploy if you want)
+  try {
+    const totalOrdersNow = Object.values(chefBalances).reduce((a,b)=>a+(b.totalOrders||0),0);
+    const todayStatsNow = getTodayStats();
+    if (totalOrdersNow === 0 && todayStatsNow.total === 0) {
+      await client.guilds.fetch();
+      const guild = client.guilds.cache.get(GUILD_ID);
+      if (guild) {
+        await guild.members.fetch().catch(()=>{});
+        const starMember = guild.members.cache.find(m => m.displayName.toLowerCase().includes('star') || m.user.username.toLowerCase().includes('star'));
+        const yoMember = guild.members.cache.find(m => m.displayName.toLowerCase().includes('yo fastest') || m.displayName.toLowerCase().includes('fastest') || m.user.username.toLowerCase().includes('fastest'));
+        if (starMember) {
+          const b = getChefBalance(starMember.id);
+          if (b.totalOrders < 7) { b.totalOrders = 7; b.balance = 14; }
+          console.log(`[RESTORE] star ${starMember.user.tag} -> 7 / $14`);
+        }
+        if (yoMember) {
+          const b2 = getChefBalance(yoMember.id);
+          if (b2.totalOrders < 6) { b2.totalOrders = 6; b2.balance = 12; }
+          console.log(`[RESTORE] yo fastest ${yoMember.user.tag} -> 6 / $12`);
+        }
+        if (starMember || yoMember) {
+          saveBalances();
+          // also restore today's daily orders
+          const todayStr = new Date().toISOString().split('T')[0];
+          if (!dailyData[todayStr] || dailyData[todayStr].orders.length === 0) {
+            dailyData[todayStr] = { orders: [] };
+            const hour = new Date().getHours();
+            if (starMember) for(let i=0;i<7;i++) dailyData[todayStr].orders.push({ chefId: starMember.id, timestamp: Date.now(), hour });
+            if (yoMember) for(let i=0;i<6;i++) dailyData[todayStr].orders.push({ chefId: yoMember.id, timestamp: Date.now(), hour });
+            saveDaily();
+            console.log(`[RESTORE] daily ${todayStr} -> star 7 + yo 6`);
+          }
+        }
+      }
+    }
+  } catch(e){ console.log('[RESTORE] fail', e.message); }
   console.log(`[i] Clocked in chefs: ${clockedIn.size} ${[...clockedIn].join(', ') || '(none)'}`);
   await registerCommands(client.guilds.cache);
   await updateStatusChannel(isOpen);
