@@ -625,7 +625,8 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName('bal')
-    .setDescription('Check your chef balance (Chef only)')
+    .setDescription('Check chef balance')
+    .addUserOption(o => o.setName('chef').setDescription('Chef to check (Admin only)').setRequired(false))
     .toJSON(),
   new SlashCommandBuilder()
     .setName('paid')
@@ -1232,15 +1233,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // === SLASH: /bal ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'bal') {
-      if (!hasChefPermission(interaction.member, interaction.guild)) {
+      const target = interaction.options.getUser('chef');
+      const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      const hasPaidRole = interaction.member.roles.cache.has(PAID_ROLE_ID);
+      const paidRole = interaction.guild.roles.cache.get(PAID_ROLE_ID);
+      const isHigherPaid = paidRole ? interaction.member.roles.highest.position >= paidRole.position : false;
+      // If checking someone else, require Admin/Crown
+      if (target && target.id !== interaction.user.id && !isAdmin && !hasPaidRole && !isHigherPaid) {
+        await interaction.reply({ content: `❌ Only Admins/Crown can check others' balances.`, ephemeral: true });
+        return;
+      }
+      // If no target, must be chef to check own
+      if (!target && !hasChefPermission(interaction.member, interaction.guild) && !isAdmin) {
         await interaction.reply({ content: '❌ Only Chefs can check balance.', ephemeral: true });
         return;
       }
-      const bal = getChefBalance(interaction.user.id);
+      const uid = target ? target.id : interaction.user.id;
+      const bal = getChefBalance(uid);
+      const title = target ? `💰 Balance for ${target.username}` : `💰 Your Balance`;
       const container = new ContainerBuilder().setAccentColor(0x2ECC71)
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💰 Your Balance`))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${title}`))
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(
-          `**Chef:** <@${interaction.user.id}>\n` +
+          `**Chef:** <@${uid}>\n` +
           `**Total Orders:** \`${bal.totalOrders}\`\n` +
           `**Balance Owed:** \`$${bal.balance.toFixed(2)}\` • $2 per order`
         ));
