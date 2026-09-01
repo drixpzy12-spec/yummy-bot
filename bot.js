@@ -377,7 +377,7 @@ function buildTicketContainer(deal, orderData, user, claimedBy = null) {
     claimedBy
       ? new ButtonBuilder().setCustomId('unclaim_ticket').setLabel('Unclaim').setStyle(ButtonStyle.Secondary).setEmoji('↩️')
       : new ButtonBuilder().setCustomId('claim_ticket').setLabel('Claim Ticket').setStyle(ButtonStyle.Success).setEmoji('🙋'),
-    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Secondary).setEmoji('✕')
+    new ButtonBuilder().setCustomId('close_ticket').setLabel('Close').setStyle(ButtonStyle.Secondary).setEmoji('🔒')
   );
   container.addActionRowComponents(row);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Ticket for ${user.tag} • <t:${Math.floor(Date.now()/1000)}:R>`));
