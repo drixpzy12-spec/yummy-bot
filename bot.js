@@ -70,8 +70,22 @@ function getChefBalance(uid) {
 }
 function countClaimedBy(uid) {
   let c = 0;
-  for (const v of claimedTickets.values()) if (v === uid) c++;
+  for (const [chId, claimer] of [...claimedTickets.entries()]) {
+    if (claimer !== uid) continue;
+    const ch = client.channels.cache.get(chId);
+    if (!ch) { claimedTickets.delete(chId);
+      saveClaimed(); continue; }
+    if (ch.parentId !== CLAIMED_CATEGORY_ID) { claimedTickets.delete(chId);
+      saveClaimed(); continue; }
+    c++;
+  }
+  // prune stale and persist if needed
+  try { saveClaimed(); } catch {}
   return c;
+}
+function getClaimCountDebug(uid) {
+  const all = [...claimedTickets.entries()].filter(([,v])=>v===uid);
+  return `${all.length} total, ${countClaimedBy(uid)} active (in Claimed)`;
 }
 const ratingStore = new Map(); // ratingMessageId -> customerId
 // Vouch points
@@ -234,8 +248,16 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// In-memory ticket claim tracker: channelId -> userId
+// Ticket claim tracker: channelId -> userId (persisted to survive restarts)
+const CLAIMED_FILE = path.join(DATA_DIR, 'claimed.json');
 const claimedTickets = new Map();
+try {
+  if (fs.existsSync(CLAIMED_FILE)) {
+    const d = JSON.parse(fs.readFileSync(CLAIMED_FILE, 'utf8'));
+    for (const [k,v] of Object.entries(d)) claimedTickets.set(k,v);
+  }
+} catch {}
+function saveClaimed() { try { fs.writeFileSync(CLAIMED_FILE, JSON.stringify(Object.fromEntries(claimedTickets), null, 2)); } catch {} }
 const ticketStore = new Map(); // channelId -> { deal, orderData, user }
 
 function hasChefPermission(member, guild) {
@@ -701,6 +723,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const claimedBy = claimedTickets.get(channelId);
         if (interaction.channel.parentId === TICKET_CATEGORY_ID) {
           claimedTickets.delete(channelId);
+      saveClaimed();
         } else {
           await interaction.reply({ content: `⚠️ Already claimed by <@${claimedBy}>`, ephemeral: true });
           return;
@@ -713,6 +736,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       claimedTickets.set(channelId, interaction.user.id);
+      saveClaimed();
 
       // V2 claimed reply
       const claimedContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
@@ -794,6 +818,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       claimedTickets.delete(channelId);
+      saveClaimed();
       const unclaimContainer = new ContainerBuilder().setAccentColor(0xF39C12)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`↩️ **Unclaimed by <@${interaction.user.id}>** — ticket is now open for any chef.`));
       await interaction.reply({ components: [unclaimContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
@@ -839,6 +864,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton() && interaction.customId === 'close_ticket') {
       await interaction.reply({ content: '🔒 Closing ticket in 3 seconds...' });
       claimedTickets.delete(interaction.channelId);
+      saveClaimed();
       setTimeout(async () => {
         await interaction.channel.delete().catch(() => interaction.channel.send('❌ No permission to delete channel.').catch(() => {}));
       }, 3000);
@@ -879,6 +905,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const cBy = claimedTickets.get(interaction.channelId);
         if (interaction.channel.parentId === TICKET_CATEGORY_ID) {
           claimedTickets.delete(interaction.channelId);
+      saveClaimed();
         } else {
           await interaction.reply({ content: `⚠️ Already claimed by <@${cBy}>`, ephemeral: true });
           return;
@@ -889,6 +916,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       claimedTickets.set(interaction.channelId, interaction.user.id);
+      saveClaimed();
       const slashClaimContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ **Claimed by <@${interaction.user.id}>** — locked to 1:1`));
       await interaction.reply({ components: [slashClaimContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
@@ -932,6 +960,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       claimedTickets.delete(interaction.channelId);
+      saveClaimed();
       const unclaimSlashContainer = new ContainerBuilder().setAccentColor(0xF39C12)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`↩️ **Unclaimed by <@${interaction.user.id}>** — now open`));
       await interaction.reply({ components: [unclaimSlashContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
@@ -965,6 +994,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'close') {
       await interaction.reply({ content: '🔒 Closing...' });
       claimedTickets.delete(interaction.channelId);
+      saveClaimed();
       setTimeout(() => interaction.channel.delete().catch(()=>{}), 2000);
       return;
     }
@@ -1098,6 +1128,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // No claim required - any chef can complete any ticket
       const wasClaimedBy = claimedTickets.get(chId);
       if (claimedTickets.has(chId)) claimedTickets.delete(chId);
+      saveClaimed();
       // Get ticket data
       const stored = ticketStore.get(chId);
       let customerId = null;
@@ -1117,6 +1148,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       logOrderToday(interaction.user.id);
       // Free claim slot
       claimedTickets.delete(chId);
+      saveClaimed();
       // Restore chef perms so they can claim again (keep channel open for rating)
       try { await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{}); } catch {}
       const totalOrders = bal.totalOrders;
