@@ -1044,37 +1044,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const container = new ContainerBuilder().setAccentColor(0x57F287);
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Chef & Admin Guide`));
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`How to use Yummy bot — clock, status & tickets`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`How to use Yummy bot — clock, status, tickets & orders`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🕐 Clock In / Out\n` +
         `• \`/clockin\` — Clock in, start receiving ticket pings (<@&${CHEF_ROLE_ID}>)\n` +
         `• \`/clockout\` — Clock out, stop receiving pings\n` +
-        `• Only clocked-in chefs get pinged when a customer creates a ticket`
+        `• Only clocked-in chefs get pinged`
       ));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🟢 / 🔴 Open & Close\n` +
-        `• \`/open\` — Set restaurant to **open**, allow tickets, rename status to \`🟢-status\`, send open gif\n` +
-        `• \`/closed\` — Set to **closed**, block new tickets (replies *Restaurant is currently closed*), rename to \`🔴-status\`, send closed gif\n` +
+        `• \`/open\` — Set to **open**, allow tickets, rename to \`🟢-status\`\n` +
+        `• \`/closed\` — Set to **closed**, block tickets\n` +
         `• Requires Chef+ or Manage Server`
       ));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🎟️ Claim & Unclaim\n` +
-        `• **Claim button** or \`/claim\` — Claim a ticket, locks it 1:1 (other chefs read-only), moves to \`Claimed\` category, renames to \`claimed-<you>\`\n` +
-        `• **Unclaim button** or \`/unclaim\` — Release your claimed ticket, moves back to \`Tickets\`, restores permissions, re-enables Claim\n` +
-        `• Only the claimer or an Admin can unclaim`
+        `• **Claim** or \`/claim\` — Claim ticket, locks 1:1, moves to \`Claimed\`\n` +
+        `• **Unclaim** or \`/unclaim\` — Release it, back to \`Tickets\`\n` +
+        `• 3 ticket limit — do \`/complete\` or \`/unclaim\` to free slot`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `### ✅ Complete & Balance **(DO THIS WHEN FINISHED)**\n` +
+        `• \`/complete\` — **Mark order done** in ticket, adds **$2**, frees slot, sends *Order Completed* + *Rate your chef* (customer rates 1-5)\n` +
+        `• \`/bal\` — Check your balance & total orders\n` +
+        `• \`/paid @user <amount>\` — Crown <@&${PAID_ROLE_ID}> clears balance (e.g. \`/paid @chef 10\`)\n` +
+        `• \`/today\` — Orders today, busiest hour, top chefs`
       ));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🔧 Admin & Utils\n` +
         `• \`/panel\` / \`!panel\` — Post ticket panel (Admin only)\n` +
-        `• \`/faq\` — Post How To Order guide (Admin only)\n` +
-        `• \`/deals\` — List all restaurants (anyone)\n` +
-        `• \`/close\` — Close & delete current ticket`
+        `• \`/faq\` — How To Order (Admin only)\n` +
+        `• \`/deals\` / \`/vouch <photo>\` — Restaurants / Vouch +10pts (anyone)\n` +
+        `• \`/close\` — Close & delete ticket`
       ));
-      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
       return;
     }
 
