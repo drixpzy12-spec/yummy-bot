@@ -730,8 +730,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       }
 
-      if (countClaimedBy(interaction.user.id) >= 3) {
-        await interaction.reply({ content: '❌ You can only claim 3 tickets at a time. Do `/complete` or `/unclaim` to free a slot.', ephemeral: true });
+      const curClaimed = countClaimedBy(interaction.user.id);
+      if (curClaimed >= 3) {
+        await interaction.reply({ content: `❌ You have \`${curClaimed}/3\` tickets claimed. Do \`/complete\` or \`/unclaim\` to free a slot.`, ephemeral: true });
         return;
       }
 
@@ -911,12 +912,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
       }
-      if (countClaimedBy(interaction.user.id) >= 3) {
-        await interaction.reply({ content: '❌ You can only claim 3 tickets at a time. Do `/complete` or `/unclaim` to free a slot.', ephemeral: true });
+      const curClaimed2 = countClaimedBy(interaction.user.id);
+      if (curClaimed2 >= 3) {
+        await interaction.reply({ content: `❌ You have \`${curClaimed2}/3\` tickets claimed. Do \`/complete\` or \`/unclaim\` to free a slot.`, ephemeral: true });
         return;
       }
       claimedTickets.set(interaction.channelId, interaction.user.id);
-      saveClaimed();
       const slashClaimContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ **Claimed by <@${interaction.user.id}>** — locked to 1:1`));
       await interaction.reply({ components: [slashClaimContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
