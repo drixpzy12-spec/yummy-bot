@@ -18,7 +18,7 @@ const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID || null;
 const CLAIMED_CATEGORY_ID = process.env.CLAIMED_CATEGORY_ID || null;
 const CHEF_ROLE_ID = process.env.CHEF_ROLE_ID || '1541821804576907415';
 const PANEL_CHANNEL_ID = process.env.PANEL_CHANNEL_ID || null;
-const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1542169772177760266';
+const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1544192690038640740';
 
 const fs = require('fs');
 const path = require('path');
