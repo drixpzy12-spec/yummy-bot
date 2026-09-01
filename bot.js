@@ -1193,7 +1193,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Top Chefs Today`));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(topLines.join('\n')));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Max Eats`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Yummy`));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
       return;
     }
