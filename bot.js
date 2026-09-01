@@ -70,6 +70,37 @@ function countClaimedBy(uid) {
   for (const v of claimedTickets.values()) if (v === uid) c++;
   return c;
 }
+const ratingStore = new Map(); // ratingMessageId -> customerId
+// Daily orders tracking for /today
+const DAILY_FILE = path.join(__dirname, 'daily_orders.json');
+let dailyData = {};
+try { if (fs.existsSync(DAILY_FILE)) dailyData = JSON.parse(fs.readFileSync(DAILY_FILE, 'utf8')); } catch {}
+function saveDaily() { try { fs.writeFileSync(DAILY_FILE, JSON.stringify(dailyData, null, 2)); } catch {} }
+function formatHour(h) { const ampm = h >= 12 ? 'PM' : 'AM'; const hr = h % 12 || 12; return `${hr} ${ampm}`; }
+function logOrderToday(chefId) {
+  const dateStr = new Date().toISOString().split('T')[0];
+  if (!dailyData[dateStr]) dailyData[dateStr] = { orders: [] };
+  dailyData[dateStr].orders.push({ chefId, timestamp: Date.now(), hour: new Date().getHours() });
+  saveDaily();
+}
+function getTodayStats() {
+  const dateStr = new Date().toISOString().split('T')[0];
+  const data = dailyData[dateStr];
+  if (!data || !data.orders.length) return { dateStr, total: 0, busiest: null, top: [] };
+  const total = data.orders.length;
+  const byChef = {};
+  const byHour = {};
+  for (const o of data.orders) {
+    byChef[o.chefId] = (byChef[o.chefId] || 0) + 1;
+    const label = formatHour(o.hour);
+    byHour[label] = (byHour[label] || 0) + 1;
+  }
+  let busiest = null;
+  let maxHour = 0;
+  for (const [h, c] of Object.entries(byHour)) { if (c > maxHour) { maxHour = c; busiest = { label: h, count: c }; } }
+  const top = Object.entries(byChef).sort((a,b)=>b[1]-a[1]).slice(0, 4);
+  return { dateStr, total, busiest, top };
+}
 async function updateStatusGif(open) {
   try {
     const guild = client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
@@ -531,6 +562,10 @@ const commands = [
     .setDescription('Mark chef as paid (Crown role only) - /paid @user <amount>')
     .addUserOption(o => o.setName('user').setDescription('Chef to pay').setRequired(true))
     .addNumberOption(o => o.setName('amount').setDescription('How much you paid').setRequired(true).setMinValue(0.01))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('today')
+    .setDescription('Show orders completed today')
     .toJSON(),
 ];
 
@@ -1031,6 +1066,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       bal.balance += 2;
       bal.totalOrders += 1;
       saveBalances();
+      logOrderToday(interaction.user.id);
       // Free claim slot
       claimedTickets.delete(chId);
       // Restore chef perms so they can claim again (keep channel open for rating)
@@ -1069,8 +1105,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       );
       rating.addActionRowComponents(rateRow);
       await interaction.reply({ components: [completed], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
-      await interaction.channel.send({ components: [rating], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
-      console.log(`[✔] /complete by ${interaction.user.tag} +$2 bal $${newBal} total ${totalOrders}`);
+      const ratingMsg = await interaction.channel.send({ components: [rating], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>null);
+      if (ratingMsg && customerId) ratingStore.set(ratingMsg.id, customerId);
+      console.log(`[✔] /complete by ${interaction.user.tag} +$2 bal $${newBal} total ${totalOrders} rating for ${customerId}`);
       return;
     }
 
@@ -1125,17 +1162,68 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // === SLASH: /today ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'today') {
+      const stats = getTodayStats();
+      const dateObj = new Date();
+      const dateFormatted = dateObj.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      const total = stats.total;
+      const busiest = stats.busiest ? `${stats.busiest.label} - ${stats.busiest.count} orders` : 'No orders yet';
+      const topLines = [];
+      const medals = ['🥇', '🥈', '🥉', '4.'];
+      if (stats.top.length === 0) topLines.push('_No orders today_');
+      else {
+        for (let i = 0; i < stats.top.length; i++) {
+          const [chefId, count] = stats.top[i];
+          const member = interaction.guild.members.cache.get(chefId);
+          const name = member ? member.displayName : `<@${chefId}>`;
+          const medal = medals[i] || `${i+1}.`;
+          topLines.push(`${medal} ${name} - \`${count} orders\``);
+        }
+      }
+      const container = new ContainerBuilder().setAccentColor(0x9B59B6);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📋 Orders Today`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${dateFormatted}`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `🍔 **Orders Completed:** \`${total}\`\n` +
+        `🟢 **Busiest Hour:** \`${busiest}\``
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Top Chefs Today`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(topLines.join('\n')));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Max Eats`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
+      return;
+    }
+
     // === BUTTON: Rate 1-5 ===
     if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
+      // Only customer can rate
+      let allowedCustomer = ratingStore.get(interaction.message.id);
+      if (!allowedCustomer) {
+        // fallback: try ticketStore via channel
+        const chStored = ticketStore.get(interaction.channelId);
+        if (chStored?.user) allowedCustomer = chStored.user.id;
+        else {
+          const m = interaction.channel.topic?.match(/\b\d{17,20}\b/);
+          if (m) allowedCustomer = m[0];
+        }
+      }
+      if (allowedCustomer && interaction.user.id !== allowedCustomer) {
+        await interaction.reply({ content: '❌ Only the customer can rate their chef.', ephemeral: true });
+        return;
+      }
       const stars = interaction.customId.split('_')[1];
       const thank = new ContainerBuilder().setAccentColor(0x57F287)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`⭐ Thanks for rating **${stars}/5**!`));
       await interaction.reply({ components: [thank], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
-      // disable rating buttons
       try {
         const disabled = new ContainerBuilder().setAccentColor(0xFFD700)
           .addTextDisplayComponents(new TextDisplayBuilder().setContent(`⭐ Rated **${stars}/5** by <@${interaction.user.id}>`));
         await interaction.message.edit({ components: [disabled], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
+        ratingStore.delete(interaction.message.id);
       } catch {}
       return;
     }
