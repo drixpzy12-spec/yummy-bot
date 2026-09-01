@@ -17,6 +17,7 @@ const GUILD_ID = process.env.GUILD_ID;
 const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID || null;
 const CLAIMED_CATEGORY_ID = process.env.CLAIMED_CATEGORY_ID || null;
 const CHEF_ROLE_ID = process.env.CHEF_ROLE_ID || '1541821804576907415';
+const PAID_ROLE_ID = '1541821517887709194';
 const PANEL_CHANNEL_ID = process.env.PANEL_CHANNEL_ID || null;
 const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1544192690038640740';
 
@@ -525,6 +526,11 @@ const commands = [
     .setName('bal')
     .setDescription('Check your chef balance (Chef only)')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('paid')
+    .setDescription('Clear chef balances (Crown role only)')
+    .addUserOption(o => o.setName('chef').setDescription('Chef to clear (leave empty to clear all)').setRequired(false))
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -1005,15 +1011,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       const chId = interaction.channelId;
-      if (!claimedTickets.has(chId)) {
-        await interaction.reply({ content: '⚠️ This ticket is not claimed. Claim it first.', ephemeral: true });
-        return;
-      }
-      const claimedBy = claimedTickets.get(chId);
-      if (claimedBy !== interaction.user.id && !interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can complete this.`, ephemeral: true });
-        return;
-      }
+      // No claim required - any chef can complete any ticket
+      const wasClaimedBy = claimedTickets.get(chId);
+      if (claimedTickets.has(chId)) claimedTickets.delete(chId);
       // Get ticket data
       const stored = ticketStore.get(chId);
       let customerId = null;
@@ -1089,6 +1089,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
         ));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
+    }
+
+    // === SLASH: /paid ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'paid') {
+      const hasPaidRole = interaction.member.roles.cache.has(PAID_ROLE_ID) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+      // also allow higher than PAID role via hierarchy
+      const paidRole = interaction.guild.roles.cache.get(PAID_ROLE_ID);
+      const isHigher = paidRole ? interaction.member.roles.highest.position >= paidRole.position : false;
+      if (!hasPaidRole && !isHigher) {
+        await interaction.reply({ content: `❌ Only <@&${PAID_ROLE_ID}> or higher can use \`/paid\`.`, ephemeral: true });
+        return;
+      }
+      const targetUser = interaction.options.getUser('chef');
+      let cleared = 0;
+      let totalCleared = 0;
+      if (targetUser) {
+        const foundId = targetUser.id;
+        if (!chefBalances[foundId] || chefBalances[foundId].balance === 0) {
+          await interaction.reply({ content: `⚠️ No balance for <@${foundId}>.`, ephemeral: true });
+          return;
+        }
+        totalCleared = chefBalances[foundId].balance;
+        chefBalances[foundId].balance = 0;
+        saveBalances();
+        const container = new ContainerBuilder().setAccentColor(0x57F287)
+          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Cleared **$${totalCleared.toFixed(2)}** for <@${foundId}> — balance now $0.00`));
+        await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+        return;
+      } else {
+        // clear all
+        for (const id of Object.keys(chefBalances)) {
+          if (chefBalances[id].balance > 0) { totalCleared += chefBalances[id].balance; chefBalances[id].balance = 0; cleared++; }
+        }
+        saveBalances();
+        const container = new ContainerBuilder().setAccentColor(0x57F287)
+          .addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ Cleared **${cleared}** chefs — total **$${totalCleared.toFixed(2)}** reset to $0.00`));
+        await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+        return;
+      }
     }
 
     // === BUTTON: Rate 1-5 ===
