@@ -24,7 +24,9 @@ const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1544192690038640740'
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
-const STATUS_FILE = path.join(__dirname, 'status.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+const STATUS_FILE = path.join(DATA_DIR, 'status.json');
 let isOpen = true;
 let statusGifMessageId = null;
 try {
@@ -40,7 +42,7 @@ function saveStatus(open, gifId = statusGifMessageId) {
   try { fs.writeFileSync(STATUS_FILE, JSON.stringify({ open, gifMessageId: statusGifMessageId }, null, 2)); } catch {}
 }
 // Clock in/out for chefs
-const CLOCK_FILE = path.join(__dirname, 'clock.json');
+const CLOCK_FILE = path.join(DATA_DIR, 'clock.json');
 const clockedIn = new Set();
 try {
   if (fs.existsSync(CLOCK_FILE)) {
@@ -56,7 +58,7 @@ function getChefPings() {
   return [...clockedIn].map(id => `<@${id}>`).join(' ');
 }
 // Balances for chefs - $2 per complete
-const BALANCE_FILE = path.join(__dirname, 'chef_balances.json');
+const BALANCE_FILE = path.join(DATA_DIR, 'chef_balances.json');
 let chefBalances = {};
 try {
   if (fs.existsSync(BALANCE_FILE)) chefBalances = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
@@ -73,7 +75,7 @@ function countClaimedBy(uid) {
 }
 const ratingStore = new Map(); // ratingMessageId -> customerId
 // Vouch points
-const VOUCH_POINTS_FILE = path.join(__dirname, 'vouch_points.json');
+const VOUCH_POINTS_FILE = path.join(DATA_DIR, 'vouch_points.json');
 let vouchPoints = {};
 try { if (fs.existsSync(VOUCH_POINTS_FILE)) vouchPoints = JSON.parse(fs.readFileSync(VOUCH_POINTS_FILE, 'utf8')); } catch {}
 function saveVouchPoints() { try { fs.writeFileSync(VOUCH_POINTS_FILE, JSON.stringify(vouchPoints, null, 2)); } catch {} }
@@ -90,7 +92,7 @@ async function watermarkBuffer(buf) {
   } catch (e) { console.log('[X] watermark', e.message); return buf; }
 }
 // Daily orders tracking for /today
-const DAILY_FILE = path.join(__dirname, 'daily_orders.json');
+const DAILY_FILE = path.join(DATA_DIR, 'daily_orders.json');
 let dailyData = {};
 try { if (fs.existsSync(DAILY_FILE)) dailyData = JSON.parse(fs.readFileSync(DAILY_FILE, 'utf8')); } catch {}
 function saveDaily() { try { fs.writeFileSync(DAILY_FILE, JSON.stringify(dailyData, null, 2)); } catch {} }
