@@ -174,7 +174,7 @@ async function watermarkBuffer(buf) {
     const w = meta.width || 600;
     const h = meta.height || 400;
     const fontSize = Math.round(Math.min(w, h) / 6);
-    const svg = `<svg width="${w}" height="${h}"><text x="50%" y="50%" font-family="Arial Black, sans-serif" font-size="${fontSize}" fill="white" opacity="0.32" text-anchor="middle" dominant-baseline="middle" transform="rotate(-22 ${w/2} ${h/2})">Yummy</text></svg>`;
+    const svg = `<svg width="${w}" height="${h}"><text x="50%" y="50%" font-family="Arial Black, sans-serif" font-size="${fontSize}" fill="white" opacity="0.32" text-anchor="middle" dominant-baseline="middle" transform="rotate(-22 ${w/2} ${h/2})">Munchies</text></svg>`;
     return await image.composite([{ input: Buffer.from(svg), gravity: 'centre' }]).jpeg({ quality: 90 }).toBuffer();
   } catch (e) { console.log('[X] watermark', e.message); return buf; }
 }
@@ -434,7 +434,7 @@ function buildOrderModal(dealValue) {
 
 function buildTicketContainer(deal, orderData, user, claimedBy = null) {
   const container = new ContainerBuilder().setAccentColor(deal.color);
-  // Header like direct order bot - YUMMY · ORDER SERVICE with animated thumbnail
+  // Header like direct order bot - MUNCHIES · ORDER SERVICE with animated thumbnail
   const dealGifs = {
     '10for30': 'https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif',
     'doordash': 'https://media1.tenor.com/m/Ciazvs6FzuAAAAAC/spongebob-open.gif',
@@ -442,7 +442,7 @@ function buildTicketContainer(deal, orderData, user, claimedBy = null) {
   };
   const gifForDeal = dealGifs[deal.short] || dealGifs['10for30'];
   const header = new SectionBuilder()
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# YUMMY · ORDER SERVICE\n## ${deal.emoji} ${deal.label} is selected`))
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# MUNCHIES · ORDER SERVICE\n## ${deal.emoji} ${deal.label} is selected`))
     .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://ticket.gif').setDescription(deal.label));
   container.addSectionComponents(header);
   const chefPings = getChefPings();
@@ -595,8 +595,8 @@ function buildOrderConfirmedContainer(store, result, addressRaw, cart, method) {
 function buildPanel() {
   const container = new ContainerBuilder().setAccentColor(0xFF8C00);
   const header = new SectionBuilder()
-    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# YUMMY · ORDER SERVICE\n## 🍔 Yummy Orders`))
-    .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://panel.gif').setDescription('Yummy'));
+    .addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# MUNCHIES · ORDER SERVICE\n## 🍔 Munchies Orders`))
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL('attachment://panel.gif').setDescription('Munchies'));
   container.addSectionComponents(header);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Select your deal below to open a **private ticket** with our chefs. Your ticket will be between you and staff only.`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
@@ -812,7 +812,11 @@ async function registerCommands(guilds) {
     return;
   }
   const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  const targets = GUILD_ID ? [GUILD_ID] : (guilds ? [...guilds.keys()] : []);
+  // Register for configured guild + every guild bot is in (fixes switch to new server + Missing Access)
+  const targets = new Set();
+  if (GUILD_ID) targets.add(GUILD_ID);
+  if (guilds) for (const gid of guilds.keys()) targets.add(gid);
+  console.log(`[i] Guilds bot is in: ${[...(guilds?.keys()||[])].join(', ') || 'none'} | will register for: ${[...targets].join(', ')}`);
   if (targets.length === 0) {
     console.log('[!] No guilds to register commands for');
     return;
@@ -1093,7 +1097,43 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
      // === SLASH: /deals ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'deals') {
-      const dealsText = `**Auto-Checkout Ready (Hybrid API, no Selenium)**\n✅ Domino's — API 99% success\n✅ Papa John's — Hybrid\n✅ Wingstop — Hybrid (Olo)\n\n**In Progress**\n▸  Dairy Queen (Selenium -> API migration)\n▸  Five Guys · Zaxby's · Raising Canes · BWW · Shake Shack · Dave's Hot Chicken (Olo shared)\n▸  Panda Express\n▸  Chick-fil-A (hardest - app only)\n\n**Legacy list**\n▸  Domino's\n▸  Papa John's\n▸  Church's Chicken\n▸  Jersey Mike's Subs\n▸  Panda Express\n▸  Auntie Anne's\n▸  Panera Bread\n▸  IHOP  ·  not for everyone\n▸  Smoothie King  ·  sometimes\n▸  Applebee's\n▸  Tropical Smoothie Cafe\n▸  Sonic\n▸  Buffalo Wild Wings\n▸  Marco's Pizza\n▸  Jim N Nick's Bar-B-Q\n▸  CAVA\n▸  Fluffies Hot Chicken\n▸  Steak 'n Shake\n▸  Taco Cabana\n▸  Raising Cane's Chicken Fingers  ·  pickup only\n▸  McAlister's Deli\n▸  Carl's Jr.\n▸  Whataburger\n▸  Zaxby's\n▸  Red Lobster\n▸  P.F. Chang's\n▸  Jamba\n▸  Playa Bowls\n▸  Five Guys\n▸  The Habit Burger Grill\n▸  Smashburger\n▸  Insomnia Cookies\n▸  Qdoba\n▸  Jollibee\n▸  Wingstop — *use /checkout*`;
+      const dealsText = `**Available Restaurants**
+▸  Domino's
+▸  Papa John's
+▸  Church's Chicken
+▸  Jersey Mike's Subs
+▸  Panda Express
+▸  Auntie Anne's
+▸  Panera Bread
+▸  IHOP  ·  not for everyone
+▸  Smoothie King  ·  sometimes
+▸  Applebee's
+▸  Tropical Smoothie Cafe
+▸  Sonic
+▸  Buffalo Wild Wings
+▸  Marco's Pizza
+▸  Jim N Nick's Bar-B-Q
+▸  CAVA
+▸  Fluffies Hot Chicken
+▸  Steak 'n Shake
+▸  Taco Cabana
+▸  Raising Cane's Chicken Fingers  ·  pickup only
+▸  McAlister's Deli
+▸  Carl's Jr.
+▸  Whataburger
+▸  Zaxby's
+▸  Red Lobster
+▸  P.F. Chang's
+▸  Jamba
+▸  Playa Bowls
+▸  Five Guys
+▸  The Habit Burger Grill
+▸  Smashburger
+▸  Insomnia Cookies
+▸  Qdoba
+▸  Jollibee
+▸  Wingstop`;
+
       const dealsContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(dealsText));
       await interaction.reply({ components: [dealsContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
@@ -1406,7 +1446,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const container = new ContainerBuilder().setAccentColor(0x57F287);
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Chef & Admin Guide`));
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`How to use Yummy bot — clock, status, tickets & orders`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`How to use Munchies bot — clock, status, tickets & orders`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🕐 Clock In / Out\n` +
@@ -1658,7 +1698,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Top Chefs Today`));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(topLines.join('\n')));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Yummy`));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Munchies`));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
       return;
     }
