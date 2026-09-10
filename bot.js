@@ -735,24 +735,6 @@ const commands = [
     .setDescription('Show available restaurants')
     .toJSON(),
   new SlashCommandBuilder()
-    .setName('checkout')
-    .setDescription('Auto-checkout (hybrid API + Playwright fallback, no Selenium)')
-    .addStringOption(o => o.setName('store').setDescription('Store').setRequired(true).addChoices(
-      { name: 'Dominos', value: 'dominos' },
-      { name: 'Papa Johns', value: 'papajohns' },
-      { name: 'Wingstop', value: 'wingstop' },
-      { name: 'Dairy Queen', value: 'dairyqueen' },
-      { name: 'Five Guys', value: 'fiveguys' },
-      { name: 'Zaxbys', value: 'zaxbys' },
-      { name: 'Raising Canes', value: 'raisingcanes' },
-      { name: 'Buffalo Wild Wings', value: 'bww' },
-      { name: "Dave's Hot Chicken", value: 'daves' },
-      { name: 'Shake Shack', value: 'shakeshack' },
-    ))
-    .addStringOption(o => o.setName('address').setDescription('Full address: Street, City, ST ZIP').setRequired(true))
-    .addStringOption(o => o.setName('cart').setDescription('Cart JSON or simple: Large Pepperoni x1').setRequired(false))
-    .toJSON(),
-  new SlashCommandBuilder()
     .setName('place')
     .setDescription('Place order - choose store, delivery/pickup, and address')
     .addStringOption(o => o.setName('store').setDescription('Store').setRequired(true).addChoices(
@@ -1231,74 +1213,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const dealsContainer = new ContainerBuilder().setAccentColor(0x2ECC71)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(dealsText));
       await interaction.reply({ components: [dealsContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
-      return;
-    }
-
-    // === SLASH: /checkout (Hybrid API + Playwright, no Selenium) ===
-    if (interaction.isChatInputCommand() && interaction.commandName === 'checkout') {
-      try { await interaction.deferReply({ flags: MessageFlagsBitField.Flags.Ephemeral }); } catch(e){ console.log('[checkout] defer fail', e.message); }
-      const store = interaction.options.getString('store');
-      const addressRaw = interaction.options.getString('address');
-      const cartRaw = interaction.options.getString('cart');
-      // Parse address: Street, City, ST ZIP  or Street|City|ST|ZIP
-      let address = {};
-      try {
-        if (addressRaw.includes('|')) {
-          const parts = addressRaw.split('|').map(s=>s.trim());
-          address = { street: parts[0]||'', city: parts[1]||'', state: parts[2]||'', zip: parts[3]||'' };
-        } else {
-          // Try "123 Main St, Dallas, TX 75201"
-          const m = addressRaw.match(/^(.*?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5}(?:-\d{4})?)/i);
-          if (m) address = { street: m[1].trim(), city: m[2].trim(), state: m[3].trim().toUpperCase(), zip: m[4].trim() };
-          else address = { street: addressRaw, city: '', state: '', zip: '' };
-        }
-      } catch(e){ address = { street: addressRaw, city: '', state: '', zip: '' }; }
-      // Parse cart
-      let cart = [];
-      if (cartRaw) {
-        try {
-          if (cartRaw.trim().startsWith('[') || cartRaw.trim().startsWith('{')) cart = JSON.parse(cartRaw);
-          else cart = [{ id: cartRaw, name: cartRaw, selected_size: 'Large', quantity: 1, customizations: [] }];
-          if (!Array.isArray(cart)) cart = [cart];
-        } catch { cart = [{ id: cartRaw, name: cartRaw, selected_size: 'Large', quantity: 1, customizations: [] }]; }
-      } else {
-        // Default demo cart per store
-        if (store === 'dominos') cart = [{ id: 'dominos-build-your-pizza', name: 'Build Your Pizza', selected_size: 'Large', quantity: 1, customizations: ['Pepperoni'] }];
-        else if (store === 'papajohns') cart = [{ id: 'pj-pepperoni', name: 'Pepperoni Pizza', selected_size: 'Large', quantity: 1, customizations: [] }];
-        else if (store === 'wingstop') cart = [{ id: 'ws-classic-wings', name: 'Classic Wings', selected_size: '10 Piece', quantity: 1, customizations: ['Garlic Parmesan'] }];
-        else cart = [{ id: 'test-item', name: 'Test Item', selected_size: 'Regular', quantity: 1, customizations: [] }];
-      }
-      const orderData = { address, cart, contact: {}, payment: {} };
-      const py = process.env.PYTHON || 'python';
-      const proc = spawn(py, ['-m', 'stores.service', store, JSON.stringify(orderData)], { cwd: __dirname });
-      let out = ''; let err = '';
-      proc.stdout.on('data', d=> out += d.toString());
-      proc.stderr.on('data', d=> err += d.toString());
-      const timeout = setTimeout(()=> { try{ proc.kill(); }catch{} }, 40000);
-      proc.on('close', async code => {
-        clearTimeout(timeout);
-        if (code !== 0) {
-          await interaction.editReply({ content: `❌ Checkout failed (${store}) code ${code}:\n\`\`\`${(err||out).slice(0,1500)}\`\`\`` }).catch(()=>{});
-          return;
-        }
-        try {
-          // out may contain log lines before JSON (proxy logs) — extract JSON
-          let jsonStr = out;
-          const idx = out.indexOf('{"success"') !== -1 ? out.indexOf('{"success"') : out.indexOf('{');
-          if (idx > 0) jsonStr = out.slice(idx);
-          // also handle pretty-printed JSON starting with "{\n"
-          if (jsonStr.trim().startsWith('{') === false) {
-            const firstBrace = out.indexOf('{\n');
-            if (firstBrace !== -1) jsonStr = out.slice(firstBrace);
-          }
-          const result = JSON.parse(jsonStr);
-          const confirmed = buildOrderConfirmedContainer(store, result, addressRaw, cart, 'delivery');
-          await interaction.editReply({ components: [confirmed], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>{});
-        } catch(e) {
-          console.log('[checkout] parse fail', e.message, 'out:', out.slice(0,800));
-          await interaction.editReply({ content: `❌ Parse failed:\n\`\`\`${e.message}\`\`\`\nRaw:\n\`\`\`json\n${out.slice(0,1500)}\n\`\`\`` }).catch(()=>{});
-        }
-      });
       return;
     }
 
