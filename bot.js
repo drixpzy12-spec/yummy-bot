@@ -112,6 +112,24 @@ function saveStatus(open, gifId = statusGifMessageId) {
   dbSet('status', { open, gifMessageId: statusGifMessageId });
   saveToDiscord('status', { open, gifMessageId: statusGifMessageId });
 }
+// Platform toggles (which deal types appear on the order panel)
+const PLATFORMS_FILE = path.join(DATA_DIR, 'platforms.json');
+let platforms = { '10for30': true, 'doordash': true, 'ubereats': true };
+try {
+  if (fs.existsSync(PLATFORMS_FILE)) {
+    const data = JSON.parse(fs.readFileSync(PLATFORMS_FILE, 'utf8'));
+    if (data && typeof data === 'object') {
+      for (const key of ['10for30', 'doordash', 'ubereats']) {
+        if (typeof data[key] === 'boolean') platforms[key] = data[key];
+      }
+    }
+  }
+} catch {}
+function savePlatforms() {
+  try { fs.writeFileSync(PLATFORMS_FILE, JSON.stringify(platforms, null, 2)); } catch {}
+  dbSet('platforms', platforms);
+  saveToDiscord('platforms', platforms);
+}
 // Clock in/out for chefs
 const CLOCK_FILE = path.join(DATA_DIR, 'clock.json');
 const clockedIn = new Set();
@@ -600,18 +618,25 @@ function buildPanel() {
   container.addSectionComponents(header);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`Select your deal below to open a **private ticket** with our chefs. Your ticket will be between you and staff only.`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🥬 10 FOR 30 DEALS**\nBest value bundle — 10 items for $30`));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🚗 DOORDASH**\nGroup order discount — share your group link`));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🛵 Uber Eats**\nFood delivery — Uber Eats orders`));
+  const platformOptions = [];
+  if (platforms['10for30']) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🥬 10 FOR 30 DEALS**\nBest value bundle — 10 items for $30`));
+    platformOptions.push({ label: '10 FOR 30 DEALS 🥬', value: 'deal_10for30', description: 'Open ticket for 10 for 30 deal', emoji: '🥬' });
+  }
+  if (platforms['doordash']) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🚗 DOORDASH**\nGroup order discount — share your group link`));
+    platformOptions.push({ label: 'DOORDASH 🚗', value: 'deal_doordash', description: 'Open ticket for DOORDASH', emoji: '🚗' });
+  }
+  if (platforms['ubereats']) {
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🛵 Uber Eats**\nFood delivery — Uber Eats orders`));
+    platformOptions.push({ label: 'Uber Eats 🛵', value: 'deal_ubereats', description: 'Open ticket for Uber Eats', emoji: '🛵' });
+  }
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
   const menu = new StringSelectMenuBuilder()
     .setCustomId('ticket_select')
-    .setPlaceholder('🛒 Choose your deal...')
-    .addOptions(
-      { label: '10 FOR 30 DEALS 🥬', value: 'deal_10for30', description: 'Open ticket for 10 for 30 deal', emoji: '🥬' },
-      { label: 'DOORDASH 🚗', value: 'deal_doordash', description: 'Open ticket for DOORDASH', emoji: '🚗' },
-      { label: 'Uber Eats 🛵', value: 'deal_ubereats', description: 'Open ticket for Uber Eats', emoji: '🛵' }
-    );
+    .setPlaceholder(platformOptions.length === 0 ? '❌ No platforms open right now' : '🛒 Choose your deal...')
+    .setDisabled(platformOptions.length === 0);
+  if (platformOptions.length > 0) menu.addOptions(platformOptions);
   const row = new ActionRowBuilder().addComponents(menu);
   container.addActionRowComponents(row);
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 📍 Select a deal to get started • Tickets are private`));
@@ -804,6 +829,11 @@ const commands = [
     .setDescription('Vouch with a photo - earn 10 points')
     .addAttachmentOption(o => o.setName('photo').setDescription('Upload your vouch photo').setRequired(true))
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('platforms')
+    .setDescription('Toggle which platforms are open on the order panel (Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -854,6 +884,12 @@ client.once(Events.ClientReady, async () => {
       if (v) vouchPoints = v;
       const cl = await dbGet('claimed', null);
       if (cl) { claimedTickets.clear(); for (const [k,vv] of Object.entries(cl)) claimedTickets.set(k,vv); }
+      const pl = await dbGet('platforms', null);
+      if (pl && typeof pl === 'object') {
+        for (const key of ['10for30', 'doordash', 'ubereats']) {
+          if (typeof pl[key] === 'boolean') platforms[key] = pl[key];
+        }
+      }
       console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size}`);
     } catch(e){ console.log('[DB] load fail', e.message); }
   }
@@ -877,6 +913,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const normalized = choice === 'deal_redapp' ? 'deal_doordash' : choice;
       const modal = buildOrderModal(normalized);
       await interaction.showModal(modal);
+      return;
+    }
+
+    // === BUTTON: platform toggle (admin panel) ===
+    if (interaction.isButton() && (interaction.customId === 'toggle_10for30' || interaction.customId === 'toggle_doordash' || interaction.customId === 'toggle_ubereats')) {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: '❌ Admins only.', ephemeral: true });
+        return;
+      }
+      const key = interaction.customId.replace('toggle_', '');
+      platforms[key] = !platforms[key];
+      savePlatforms();
+      const statusLine = (name, k) => `${platforms[k] ? '🟢' : '🔴'} **${name}** — ${platforms[k] ? 'OPEN' : 'CLOSED'}`;
+      const container = new ContainerBuilder().setAccentColor(0xFF8C00);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent('## ⚙️ Platform Manager\nToggle which platforms appear on the **order panel** for customers.'));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `${statusLine('10 FOR 30 DEALS', '10for30')}\n${statusLine('DOORDASH', 'doordash')}\n${statusLine('Uber Eats', 'ubereats')}`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent('Click a button below to **toggle** a platform on/off:'));
+      const btnRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('toggle_10for30').setLabel('10 FOR 30').setStyle(platforms['10for30'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🥬'),
+        new ButtonBuilder().setCustomId('toggle_doordash').setLabel('DOORDASH').setStyle(platforms['doordash'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🚗'),
+        new ButtonBuilder().setCustomId('toggle_ubereats').setLabel('UBER EATS').setStyle(platforms['ubereats'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🛵'),
+      );
+      container.addActionRowComponents(btnRow);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Green = open • Red = closed • Changes are instant`));
+      await interaction.update({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
       return;
     }
 
@@ -1092,6 +1157,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const files = gifAtt ? [gifAtt] : [];
       await targetChannel.send({ ...panel, files });
       await interaction.reply({ content: `✅ Panel sent in <#${targetChannel.id}>`, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /platforms (Admin toggle panel platforms) ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'platforms') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+        await interaction.reply({ content: '❌ Only **Admins** can use `/platforms`.', ephemeral: true });
+        return;
+      }
+      const container = new ContainerBuilder().setAccentColor(0xFF8C00);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent('## ⚙️ Platform Manager\nToggle which platforms appear on the **order panel** for customers.'));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      const statusLine = (name, key) => {
+        const on = platforms[key];
+        return `${on ? '🟢' : '🔴'} **${name}** — ${on ? 'OPEN' : 'CLOSED'}`;
+      };
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `${statusLine('10 FOR 30 DEALS', '10for30')}\n${statusLine('DOORDASH', 'doordash')}\n${statusLine('Uber Eats', 'ubereats')}`
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent('Click a button below to **toggle** a platform on/off:'));
+      const btnRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('toggle_10for30').setLabel('10 FOR 30').setStyle(platforms['10for30'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🥬'),
+        new ButtonBuilder().setCustomId('toggle_doordash').setLabel('DOORDASH').setStyle(platforms['doordash'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🚗'),
+        new ButtonBuilder().setCustomId('toggle_ubereats').setLabel('UBER EATS').setStyle(platforms['ubereats'] ? ButtonStyle.Success : ButtonStyle.Danger).setEmoji('🛵'),
+      );
+      container.addActionRowComponents(btnRow);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Green = open • Red = closed • Changes are instant`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
 
