@@ -905,6 +905,11 @@ const commands = [
     .setDescription('Toggle which platforms are open on the order panel (Admin only)')
     .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('points')
+    .setDescription('Check your vouch points (or another user)')
+    .addUserOption(o => o.setName('user').setDescription('User to check (Admin/Chef can check others)').setRequired(false))
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -2014,6 +2019,53 @@ client.on(Events.InteractionCreate, async (interaction) => {
         console.log('[X] vouch', e.message);
         await interaction.editReply({ content: `❌ Failed to process vouch: ${e.message}` });
       }
+      return;
+    }
+
+    // === SLASH: /points ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'points') {
+      const target = interaction.options.getUser('user');
+      const uid = target ? target.id : interaction.user.id;
+      // if checking others, allow only Admin/Chef to check others
+      if (target && target.id !== interaction.user.id) {
+        const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
+        const isChef = hasChefPermission(interaction.member, interaction.guild);
+        if (!isAdmin && !isChef) {
+          await interaction.reply({ content: '❌ Only Admins/Chefs can check others\' points.', ephemeral: true });
+          return;
+        }
+      }
+      const pts = vouchPoints[uid] || 0;
+      const member = interaction.guild.members.cache.get(uid);
+      const name = member ? member.displayName : (target ? target.username : interaction.user.username);
+      // rank
+      const sorted = Object.entries(vouchPoints).sort((a,b)=>b[1]-a[1]);
+      const rank = sorted.findIndex(([id])=>id===uid) + 1;
+      const rankStr = rank ? `#${rank}` : 'Unranked';
+      // leaderboard top 3
+      const topLines = sorted.slice(0,3).map(([id, p], i) => {
+        const m = interaction.guild.members.cache.get(id);
+        const n = m ? m.displayName : `<@${id}>`;
+        const medal = ['🥇','🥈','🥉'][i] || `${i+1}.`;
+        return `${medal} ${n} — \`${p} pts\``;
+      });
+      const container = new ContainerBuilder().setAccentColor(0x9B59B6);
+      const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💎 Vouch Points — ${name}\n<@${uid}> • ${rankStr} • \`${pts} points\``))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(member?.displayAvatarURL({ extension: 'png', size: 256 }) || interaction.user.displayAvatarURL()).setDescription(name));
+      container.addSectionComponents(header);
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**Your Points:** \`${pts}\` ✨\n` +
+        `**How to earn:** \`/vouch <photo>\` → +10 points per vouch (Munchies watermark)\n` +
+        `**Rank:** ${rankStr} on server`
+      ));
+      if (topLines.length) {
+        container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**🏆 Leaderboard Top 3**\n${topLines.join('\n')}`));
+      }
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# User ID: \`${uid}\``));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
 
