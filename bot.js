@@ -179,7 +179,29 @@ function getClaimCountDebug(uid) {
   const all = [...claimedTickets.entries()].filter(([,v])=>v===uid);
   return `${all.length} total, ${countClaimedBy(uid)} active (in Claimed)`;
 }
-const ratingStore = new Map(); // ratingMessageId -> customerId
+const ratingStore = new Map(); // ratingMessageId -> { customerId, chefId }
+// Chef ratings - persistent star ratings
+const RATINGS_FILE = path.join(DATA_DIR, 'chef_ratings.json');
+let chefRatings = {}; // chefId -> { totalStars, count, avg, distribution:{1:0..5:0} }
+try { if (fs.existsSync(RATINGS_FILE)) chefRatings = JSON.parse(fs.readFileSync(RATINGS_FILE, 'utf8')); } catch {}
+function saveChefRatings() { try { fs.writeFileSync(RATINGS_FILE, JSON.stringify(chefRatings, null, 2)); } catch {} dbSet('chef_ratings', chefRatings); saveToDiscord('chef_ratings', chefRatings); }
+function addChefRating(chefId, stars, customerId) {
+  if (!chefRatings[chefId]) chefRatings[chefId] = { totalStars: 0, count: 0, distribution: { '1':0,'2':0,'3':0,'4':0,'5':0 } };
+  const r = chefRatings[chefId];
+  r.totalStars += stars;
+  r.count += 1;
+  r.distribution[String(stars)] = (r.distribution[String(stars)]||0)+1;
+  // keep last 20 ratings detail for recent view (optional)
+  if (!r.recent) r.recent = [];
+  r.recent.unshift({ stars, customerId, ts: Date.now() });
+  if (r.recent.length > 20) r.recent = r.recent.slice(0,20);
+  saveChefRatings();
+}
+function getChefRatingStats(chefId) {
+  const r = chefRatings[chefId];
+  if (!r || !r.count) return { count: 0, avg: 0, totalStars: 0, distribution: { '1':0,'2':0,'3':0,'4':0,'5':0 } };
+  return { count: r.count, avg: r.totalStars / r.count, totalStars: r.totalStars, distribution: r.distribution, recent: r.recent||[] };
+}
 // Vouch points
 const VOUCH_POINTS_FILE = path.join(DATA_DIR, 'vouch_points.json');
 let vouchPoints = {};
@@ -846,6 +868,11 @@ const commands = [
     .addUserOption(o => o.setName('chef').setDescription('Chef to check (Admin only)').setRequired(false))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName('chefinfo')
+    .setDescription('Show chef statistics including stars/rating')
+    .addUserOption(o => o.setName('chef').setDescription('Chef to view (defaults to yourself)').setRequired(false))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName('paid')
     .setDescription('Mark chef as paid (Crown role only) - /paid @user <amount>')
     .addUserOption(o => o.setName('user').setDescription('Chef to pay').setRequired(true))
@@ -934,7 +961,9 @@ client.once(Events.ClientReady, async () => {
           if (typeof pl[key] === 'boolean') platforms[key] = pl[key];
         }
       }
-      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size}`);
+      const cr = await dbGet('chef_ratings', null);
+      if (cr && typeof cr === 'object') chefRatings = cr;
+      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length}`);
     } catch(e){ console.log('[DB] load fail', e.message); }
   }
   await loadFromDiscord().catch(()=>{});
@@ -1124,14 +1153,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       const channelId = interaction.channelId;
-      if (!claimedTickets.has(channelId)) {
-        await interaction.reply({ content: '⚠️ Ticket is not claimed.', ephemeral: true });
-        return;
+      let claimedBy = claimedTickets.get(channelId);
+      let inferred = false;
+      if (!claimedBy) {
+        // Fallback: ticket looks claimed (in Claimed category or has chef lock) but Map lost after restart
+        const isInClaimedCat = CLAIMED_CATEGORY_ID && interaction.channel.parentId === CLAIMED_CATEGORY_ID;
+        let inferredClaimer = null;
+        try {
+          const topic = interaction.channel.topic || '';
+          const m = topic.match(/\b\d{17,20}\b/);
+          const customerId = m ? m[0] : null;
+          for (const [id, ow] of interaction.channel.permissionOverwrites.cache) {
+            if (ow.type !== 1) continue; // member overwrite only
+            if (id === client.user.id) continue;
+            if (customerId && id === customerId) continue;
+            if (ow.allow.has(PermissionsBitField.Flags.ViewChannel) && ow.allow.has(PermissionsBitField.Flags.SendMessages)) {
+              inferredClaimer = id;
+              break;
+            }
+          }
+        } catch {}
+        if (isInClaimedCat || inferredClaimer) {
+          claimedBy = inferredClaimer || interaction.user.id; // allow force unclaim
+          inferred = true;
+          if (inferredClaimer) claimedTickets.set(channelId, inferredClaimer);
+          console.log(`[↩️] unclaim fallback: isInClaimed=${isInClaimedCat} inferred=${inferredClaimer} force by ${interaction.user.tag}`);
+        } else {
+          await interaction.reply({ content: '⚠️ Ticket is not claimed.', ephemeral: true });
+          return;
+        }
       }
-      const claimedBy = claimedTickets.get(channelId);
-      // Only claimer or Admin can unclaim
+      // Only claimer or Admin can unclaim (skip strict check for inferred fallback)
       const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
-      if (interaction.user.id !== claimedBy && !isAdmin) {
+      if (!inferred && interaction.user.id !== claimedBy && !isAdmin) {
         await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim this.`, ephemeral: true });
         return;
       }
@@ -1157,10 +1211,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const newName = `ticket-${customerTag.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${dealShort}`.slice(0, 90);
         await interaction.channel.setName(newName).catch(()=>{});
       } catch {}
-      // Restore permissions for all chefs
+      // Restore permissions for all chefs - clear claimer overwrite(s)
       try {
         await interaction.channel.permissionOverwrites.edit(CHEF_ROLE_ID, { ViewChannel: true, SendMessages: true }).catch(()=>{});
-        await interaction.channel.permissionOverwrites.delete(claimedBy).catch(()=>{});
+        if (claimedBy && claimedBy !== 'unknown') await interaction.channel.permissionOverwrites.delete(claimedBy).catch(()=>{});
+        // also clear any leftover chef user overwrites (force cleanup for inferred case)
+        const topic2 = interaction.channel.topic || '';
+        const m2 = topic2.match(/\b\d{17,20}\b/);
+        const custId2 = m2 ? m2[0] : null;
+        for (const [id, ow] of interaction.channel.permissionOverwrites.cache) {
+          if (ow.type !== 1) continue;
+          if (id === client.user.id) continue;
+          if (custId2 && id === custId2) continue;
+          if (id === claimedBy) continue;
+          // delete any other user-specific allow
+          if (ow.allow.has(PermissionsBitField.Flags.ViewChannel)) {
+            await interaction.channel.permissionOverwrites.delete(id).catch(()=>{});
+          }
+        }
       } catch {}
       // Resend fresh claim prompt so chefs can press Claim again
       try {
@@ -1389,13 +1457,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: '❌ Only Chef+ can unclaim.', ephemeral: true });
         return;
       }
-      if (!claimedTickets.has(interaction.channelId)) {
-        await interaction.reply({ content: '⚠️ This ticket is not claimed.', ephemeral: true });
-        return;
+      let claimedBy = claimedTickets.get(interaction.channelId);
+      let inferredSlash = false;
+      if (!claimedBy) {
+        const isInClaimedCat2 = CLAIMED_CATEGORY_ID && interaction.channel.parentId === CLAIMED_CATEGORY_ID;
+        let inferredClaimer2 = null;
+        try {
+          const topic = interaction.channel.topic || '';
+          const m = topic.match(/\b\d{17,20}\b/);
+          const customerId = m ? m[0] : null;
+          for (const [id, ow] of interaction.channel.permissionOverwrites.cache) {
+            if (ow.type !== 1) continue;
+            if (id === client.user.id) continue;
+            if (customerId && id === customerId) continue;
+            if (ow.allow.has(PermissionsBitField.Flags.ViewChannel) && ow.allow.has(PermissionsBitField.Flags.SendMessages)) {
+              inferredClaimer2 = id;
+              break;
+            }
+          }
+        } catch {}
+        if (isInClaimedCat2 || inferredClaimer2) {
+          claimedBy = inferredClaimer2 || interaction.user.id;
+          inferredSlash = true;
+          if (inferredClaimer2) claimedTickets.set(interaction.channelId, inferredClaimer2);
+        } else {
+          await interaction.reply({ content: '⚠️ This ticket is not claimed.', ephemeral: true });
+          return;
+        }
       }
-      const claimedBy = claimedTickets.get(interaction.channelId);
       const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
-      if (interaction.user.id !== claimedBy && !isAdmin) {
+      if (!inferredSlash && interaction.user.id !== claimedBy && !isAdmin) {
         await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim.`, ephemeral: true });
         return;
       }
@@ -1626,7 +1717,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       rating.addActionRowComponents(rateRow);
       await interaction.reply({ components: [completed], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
       const ratingMsg = await interaction.channel.send({ components: [rating], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>null);
-      if (ratingMsg && customerId) ratingStore.set(ratingMsg.id, customerId);
+      if (ratingMsg && customerId) ratingStore.set(ratingMsg.id, { customerId, chefId: interaction.user.id });
       // === SUCCESSFUL CHECKOUTS LOG ===
       try {
         let scChannel = findSuccessfulCheckoutsChannel(interaction.guild);
@@ -1719,6 +1810,62 @@ client.on(Events.InteractionCreate, async (interaction) => {
           `**Total Orders:** \`${bal.totalOrders}\`\n` +
           `**Balance Owed:** \`$${bal.balance.toFixed(2)}\` • $2 per order`
         ));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /chefinfo ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'chefinfo') {
+      const target = interaction.options.getUser('chef');
+      const uid = target ? target.id : interaction.user.id;
+      const member = interaction.guild.members.cache.get(uid);
+      const displayName = member ? member.displayName : (target ? target.username : interaction.user.username);
+      const bal = getChefBalance(uid);
+      const rating = getChefRatingStats(uid);
+      const avg = rating.count ? rating.avg.toFixed(2) : '—';
+      const starsDisplay = rating.count ? '⭐'.repeat(Math.round(rating.avg)) + ` ${avg}/5` : 'No ratings yet';
+      // star breakdown bars
+      const maxCount = Math.max(...Object.values(rating.distribution), 1);
+      const bar = (n) => {
+        const c = rating.distribution[String(n)] || 0;
+        const filled = Math.round((c / maxCount) * 8);
+        return `${'█'.repeat(filled)}${'░'.repeat(8-filled)} \`${c}\``;
+      };
+      // today stats for this chef
+      const todayStr = new Date().toISOString().split('T')[0];
+      const todayOrders = (dailyData[todayStr]?.orders || []).filter(o => o.chefId === uid).length;
+      const vouchPts = vouchPoints[uid] || 0;
+      const isClocked = clockedIn.has(uid) ? '🟢 Clocked In' : '🔴 Clocked Out';
+      const hasChefRole = member ? member.roles.cache.has(CHEF_ROLE_ID) || member.roles.highest.position >= (interaction.guild.roles.cache.get(CHEF_ROLE_ID)?.position ?? 0) : false;
+      const container = new ContainerBuilder().setAccentColor(0xFFD700);
+      // Header with user
+      const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 👨‍🍳 Chef Info — ${displayName}\n<@${uid}> ${hasChefRole ? '• Chef' : '• Not Chef'} • ${isClocked}`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(member?.displayAvatarURL({ extension: 'png', size: 256 }) || interaction.user.displayAvatarURL()).setDescription(displayName));
+      container.addSectionComponents(header);
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**📦 Orders**\n↳ **Total Orders:** \`${bal.totalOrders}\` • **Today:** \`${todayOrders}\`\n` +
+        `↳ **Balance Owed:** \`$${bal.balance.toFixed(2)}\` • $2/order\n` +
+        `↳ **Vouch Points:** \`${vouchPts}\``
+      ));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**⭐ Ratings — ${rating.count} ${rating.count===1?'rating':'ratings'}**\n` +
+        `↳ **Average:** ${starsDisplay}\n` +
+        `↳ **Total Stars:** \`${rating.totalStars}\`\n` +
+        `**Breakdown**\n` +
+        `5⭐ ${bar(5)}\n` +
+        `4⭐ ${bar(4)}\n` +
+        `3⭐ ${bar(3)}\n` +
+        `2⭐ ${bar(2)}\n` +
+        `1⭐ ${bar(1)}`
+      ));
+      if (rating.recent && rating.recent.length) {
+        const recentLines = rating.recent.slice(0,3).map(r => `• ${'⭐'.repeat(r.stars)} \`${r.stars}/5\` by <@${r.customerId}> <t:${Math.floor(r.ts/1000)}:R>`).join('\n');
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Recent**\n${recentLines}`));
+      }
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Chef ID: \`${uid}\``));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
       return;
     }
@@ -1872,8 +2019,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // === BUTTON: Rate 1-5 ===
     if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
-      // Only customer can rate
-      let allowedCustomer = ratingStore.get(interaction.message.id);
+      // Only customer can rate - handle both old (string) and new ({customerId, chefId}) store formats
+      let entry = ratingStore.get(interaction.message.id);
+      let allowedCustomer = null;
+      let ratedChefId = null;
+      if (entry) {
+        if (typeof entry === 'string') allowedCustomer = entry;
+        else { allowedCustomer = entry.customerId; ratedChefId = entry.chefId; }
+      }
       if (!allowedCustomer) {
         // fallback: try ticketStore via channel
         const chStored = ticketStore.get(interaction.channelId);
@@ -1883,11 +2036,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (m) allowedCustomer = m[0];
         }
       }
+      // if we still don't have ratedChefId, try infer from channel claimed or last completer
+      if (!ratedChefId) {
+        // try claimed map, or look for recent chef from daily orders? fallback to ticket topic extra? keep null -> will try to find via channel perms
+        const fallbackChef = claimedTickets.get(interaction.channelId);
+        if (fallbackChef) ratedChefId = fallbackChef;
+      }
       if (allowedCustomer && interaction.user.id !== allowedCustomer) {
         await interaction.reply({ content: '❌ Only the customer can rate their chef.', ephemeral: true });
         return;
       }
-      const stars = interaction.customId.split('_')[1];
+      const stars = parseInt(interaction.customId.split('_')[1], 10);
+      // persist rating
+      if (ratedChefId && stars >= 1 && stars <= 5) {
+        addChefRating(ratedChefId, stars, interaction.user.id);
+        console.log(`[⭐] ${stars}/5 for chef ${ratedChefId} by ${interaction.user.tag}`);
+      }
       const thank = new ContainerBuilder().setAccentColor(0x57F287)
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`⭐ Thanks for rating **${stars}/5**!`));
       await interaction.reply({ components: [thank], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
