@@ -629,17 +629,15 @@ function findSuccessfulCheckoutsChannel(guild) {
 }
 
 function buildSuccessfulCheckoutContainer({ store, customerId, chefId, customerTotalStr, beforeDiscountStr, savingsStr, promo, orderId }) {
-  const thumbUrl = 'https://cdn.discordapp.com/attachments/1542364475531989093/1545390000000000000/food-group.jpg';
-  // fallback inline image - use a tenor food gif as thumbnail accessory
   const container = new ContainerBuilder().setAccentColor(0x2B2D31);
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   const dateLine = `${orderId} • Today at ${timeStr}`;
-  // Header section with thumbnail on the right like screenshot
+  // Header section with thumbnail on the right like screenshot - JPG works reliably as thumbnail
   const headerSection = new SectionBuilder()
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(`## Checkout Successful 🎉\nOrder completed with a customer total of **${customerTotalStr}**`)
     )
-    .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif').setDescription('success'));
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=200&h=200&fit=crop').setDescription('success'));
   container.addSectionComponents(headerSection);
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
   // Row 1: Store | Customer | Total
@@ -837,6 +835,10 @@ const commands = [
   new SlashCommandBuilder()
     .setName('complete')
     .setDescription('Mark order complete - adds $2 to balance (Chef only)')
+    .addStringOption(o => o.setName('store').setDescription('Store name (e.g. Applebees)').setRequired(true))
+    .addStringOption(o => o.setName('total').setDescription('Customer total after discount (e.g. 8.80 or $8.80)').setRequired(true))
+    .addStringOption(o => o.setName('before').setDescription('Before discount total (e.g. 22.00) - auto-calculated if empty').setRequired(false))
+    .addStringOption(o => o.setName('promo').setDescription('Promo used (default: Munchies 60% off)').setRequired(false))
     .toJSON(),
   new SlashCommandBuilder()
     .setName('bal')
@@ -1635,27 +1637,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const s = ticketStore.get(chId);
           const od = s?.orderData || {};
           const dl = s?.deal || { label: 'Munchies', short: 'deal' };
-          // Store name from ticket data, fallback to deal label
-          let storeName = (od.store && od.store.trim()) ? od.store.trim() : null;
+          // Store / totals now come from /complete options (chef input) - fallback to ticket data
+          const optStore = interaction.options.getString('store');
+          const optTotal = interaction.options.getString('total');
+          const optBefore = interaction.options.getString('before');
+          const optPromo = interaction.options.getString('promo');
+          let storeName = optStore ? optStore.trim() : null;
           if (!storeName) {
-            const cleanLabel = dl.label ? dl.label.replace(/[^\w\s&'-]/g,'').trim() : '';
-            storeName = cleanLabel || "Applebee's";
-            // shorten label like "10 FOR 30 DEALS" -> use store as "Munchies"
-            if (dl.short === '10for30' && !od.store) storeName = "Applebee's";
-            if (dl.short === 'ubereats' && !od.store) storeName = "Uber Eats Store";
-            if (dl.short === 'doordash' && !od.store) storeName = "DoorDash Store";
+            storeName = (od.store && od.store.trim()) ? od.store.trim() : null;
+            if (!storeName) {
+              const cleanLabel = dl.label ? dl.label.replace(/[^\w\s&'-]/g,'').trim() : '';
+              storeName = cleanLabel || "Munchies";
+            }
           }
           // Totals
-          let rawTotal = (od.total && String(od.total).trim()) ? String(od.total).trim() : null;
-          if (!rawTotal) rawTotal = '$8.80';
+          let rawTotal = optTotal ? String(optTotal).trim() : ((od.total && String(od.total).trim()) ? String(od.total).trim() : '$8.80');
           if (!rawTotal.startsWith('$')) rawTotal = '$' + rawTotal.replace('$','');
           const ctNum = parseFloat(rawTotal.replace(/[^0-9.]/g,'')) || 8.80;
           const customerTotalStr = `$${ctNum.toFixed(2)}`;
-          const beforeNum = ctNum / 0.4; // 60% off => customer pays 40%
+          let beforeNum;
+          if (optBefore && String(optBefore).trim()) {
+            let rawBefore = String(optBefore).trim();
+            if (!rawBefore.startsWith('$')) rawBefore = '$' + rawBefore.replace('$','');
+            beforeNum = parseFloat(rawBefore.replace(/[^0-9.]/g,'')) || (ctNum / 0.4);
+          } else {
+            beforeNum = ctNum / 0.4; // 60% off => customer pays 40%
+          }
           const beforeDiscountStr = `$${beforeNum.toFixed(2)}`;
           const savingsStr = `$${(beforeNum - ctNum).toFixed(2)}`;
-          const promoMap = { '10for30': '10 for 30', 'doordash': 'Budget Bites · 60% off', 'ubereats': 'Budget Bites · 60% off' };
-          const promo = promoMap[dl.short] || 'Budget Bites · 60% off';
+          let promo;
+          if (optPromo && optPromo.trim()) promo = optPromo.trim();
+          else {
+            const promoMap = { '10for30': 'Munchies · 60% off', 'doordash': 'Munchies · 60% off', 'ubereats': 'Munchies · 60% off' };
+            promo = promoMap[dl.short] || 'Munchies · 60% off';
+          }
           const orderId = `BB-${Math.floor(1000 + Math.random()*9000)}`;
           const scContainer = buildSuccessfulCheckoutContainer({
             store: storeName,
