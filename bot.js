@@ -628,43 +628,43 @@ function findSuccessfulCheckoutsChannel(guild) {
   return null;
 }
 
+function getStoreThumb(store) {
+  const s = (store || '').toLowerCase();
+  if (s.includes('five guys')) return 'https://images.unsplash.com/photo-1568909344668-6f14a07b56a0?w=400&h=400&fit=crop'; // burger
+  if (s.includes('applebee')) return 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=400&h=400&fit=crop'; // restaurant grill
+  if (s.includes('wingstop') || s.includes('wing')) return 'https://images.unsplash.com/photo-1527477396000-e27163b481c2?w=400&h=400&fit=crop'; // wings
+  if (s.includes('domino') || s.includes('pizza')) return 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=400&fit=crop'; // pizza
+  if (s.includes('panda') || s.includes('chinese')) return 'https://images.unsplash.com/photo-1555126634-323283e090fa?w=400&h=400&fit=crop';
+  if (s.includes('taco') || s.includes('chipotle') || s.includes('qdoba')) return 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=400&h=400&fit=crop';
+  if (s.includes('chick-fil') || s.includes('popeyes') || s.includes('kfc')) return 'https://images.unsplash.com/photo-1550547660-d9450f859349?w=400&h=400&fit=crop';
+  return 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=400&h=400&fit=crop'; // generic feast
+}
 function buildSuccessfulCheckoutContainer({ store, customerId, chefId, customerTotalStr, beforeDiscountStr, savingsStr, promo, orderId }) {
-  const container = new ContainerBuilder().setAccentColor(0x2B2D31);
+  const thumb = getStoreThumb(store);
+  const container = new ContainerBuilder().setAccentColor(0x2ECC71);
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   const dateLine = `${orderId} • Today at ${timeStr}`;
-  // Header section with thumbnail on the right like screenshot - JPG works reliably as thumbnail
+  // Header with vibrant success + store-relevant thumbnail
   const headerSection = new SectionBuilder()
     .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(`## Checkout Successful 🎉\nOrder completed with a customer total of **${customerTotalStr}**`)
+      new TextDisplayBuilder().setContent(`## ✅ Checkout Successful 🎉\n-# Order completed • customer paid **${customerTotalStr}** • saved **${savingsStr}**`)
     )
-    .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=200&h=200&fit=crop').setDescription('success'));
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL(thumb).setDescription(store));
   container.addSectionComponents(headerSection);
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-  // Row 1: Store | Customer | Total
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `-# Store  •  Customer  •  Total`
-  ));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `**${store}**     <@${customerId}>     **${customerTotalStr}**`
-  ));
+  // Row 1
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 🏪 Store  •  👤 Customer  •  💰 Total`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${store}   <@${customerId}>   \`${customerTotalStr}\``));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
-  // Row 2: Chef | Promo Used | Before Discount
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `-# Chef  •  Promo Used  •  Before Discount`
-  ));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `<@${chefId}>     ${promo}     **${beforeDiscountStr}**`
-  ));
+  // Row 2
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 👨‍🍳 Chef  •  🏷️ Promo Used  •  💳 Before Discount`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`<@${chefId}>  \`${promo}\`  ~~${beforeDiscountStr}~~ → **${customerTotalStr}**`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
-  // Row 3: Customer Total | Total Savings
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `-# Customer Total  •  Total Savings`
-  ));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-    `**${customerTotalStr}**     **${savingsStr}**`
-  ));
+  // Row 3 - highlighted savings
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 💵 Customer Total  •  ✨ Total Savings`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ${customerTotalStr}    🎉 ${savingsStr} saved`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${dateLine}`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ✅ Verified by Munchies • ${dateLine}`));
   return container;
 }
 
