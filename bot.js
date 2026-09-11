@@ -20,6 +20,7 @@ const CHEF_ROLE_ID = process.env.CHEF_ROLE_ID || '1541821804576907415';
 const PAID_ROLE_ID = '1541821517887709194';
 const PANEL_CHANNEL_ID = process.env.PANEL_CHANNEL_ID || null;
 const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '1545395198517968937';
+const SUCCESSFUL_CHECKOUTS_CHANNEL_ID = process.env.SUCCESSFUL_CHECKOUTS_CHANNEL_ID || '1547810040486825994';
 
 const fs = require('fs');
 const path = require('path');
@@ -612,6 +613,11 @@ function buildOrderConfirmedContainer(store, result, addressRaw, cart, method) {
 
 function findSuccessfulCheckoutsChannel(guild) {
   if (!guild) return null;
+  // prefer configured ID
+  if (SUCCESSFUL_CHECKOUTS_CHANNEL_ID) {
+    const byId = guild.channels.cache.get(SUCCESSFUL_CHECKOUTS_CHANNEL_ID);
+    if (byId) return byId;
+  }
   // exact + fuzzy match for "successful checkouts" / "successful-checkouts" / "successful_checkouts"
   for (const c of guild.channels.cache.values()) {
     if (c.type !== ChannelType.GuildText) continue;
@@ -1621,7 +1627,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (ratingMsg && customerId) ratingStore.set(ratingMsg.id, customerId);
       // === SUCCESSFUL CHECKOUTS LOG ===
       try {
-        const scChannel = findSuccessfulCheckoutsChannel(interaction.guild);
+        let scChannel = findSuccessfulCheckoutsChannel(interaction.guild);
+        if (!scChannel && SUCCESSFUL_CHECKOUTS_CHANNEL_ID) {
+          try { scChannel = await interaction.guild.channels.fetch(SUCCESSFUL_CHECKOUTS_CHANNEL_ID); } catch {}
+        }
         if (scChannel) {
           const s = ticketStore.get(chId);
           const od = s?.orderData || {};
