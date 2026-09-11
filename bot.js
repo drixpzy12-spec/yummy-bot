@@ -610,6 +610,60 @@ function buildOrderConfirmedContainer(store, result, addressRaw, cart, method) {
   return container;
 }
 
+function findSuccessfulCheckoutsChannel(guild) {
+  if (!guild) return null;
+  // exact + fuzzy match for "successful checkouts" / "successful-checkouts" / "successful_checkouts"
+  for (const c of guild.channels.cache.values()) {
+    if (c.type !== ChannelType.GuildText) continue;
+    const n = c.name.toLowerCase();
+    if (n === 'successful-checkouts' || n === 'successful_checkouts' || n === 'successful checkouts') return c;
+    if (/successful.*checkouts/i.test(n)) return c;
+  }
+  return null;
+}
+
+function buildSuccessfulCheckoutContainer({ store, customerId, chefId, customerTotalStr, beforeDiscountStr, savingsStr, promo, orderId }) {
+  const thumbUrl = 'https://cdn.discordapp.com/attachments/1542364475531989093/1545390000000000000/food-group.jpg';
+  // fallback inline image - use a tenor food gif as thumbnail accessory
+  const container = new ContainerBuilder().setAccentColor(0x2B2D31);
+  const timeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  const dateLine = `${orderId} • Today at ${timeStr}`;
+  // Header section with thumbnail on the right like screenshot
+  const headerSection = new SectionBuilder()
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(`## Checkout Successful 🎉\nOrder completed with a customer total of **${customerTotalStr}**`)
+    )
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif').setDescription('success'));
+  container.addSectionComponents(headerSection);
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  // Row 1: Store | Customer | Total
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `-# Store  •  Customer  •  Total`
+  ));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `**${store}**     <@${customerId}>     **${customerTotalStr}**`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+  // Row 2: Chef | Promo Used | Before Discount
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `-# Chef  •  Promo Used  •  Before Discount`
+  ));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `<@${chefId}>     ${promo}     **${beforeDiscountStr}**`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+  // Row 3: Customer Total | Total Savings
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `-# Customer Total  •  Total Savings`
+  ));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+    `**${customerTotalStr}**     **${savingsStr}**`
+  ));
+  container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${dateLine}`));
+  return container;
+}
+
 function buildPanel() {
   const container = new ContainerBuilder().setAccentColor(0xFF8C00);
   const header = new SectionBuilder()
@@ -1565,6 +1619,51 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ components: [completed], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
       const ratingMsg = await interaction.channel.send({ components: [rating], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(()=>null);
       if (ratingMsg && customerId) ratingStore.set(ratingMsg.id, customerId);
+      // === SUCCESSFUL CHECKOUTS LOG ===
+      try {
+        const scChannel = findSuccessfulCheckoutsChannel(interaction.guild);
+        if (scChannel) {
+          const s = ticketStore.get(chId);
+          const od = s?.orderData || {};
+          const dl = s?.deal || { label: 'Munchies', short: 'deal' };
+          // Store name from ticket data, fallback to deal label
+          let storeName = (od.store && od.store.trim()) ? od.store.trim() : null;
+          if (!storeName) {
+            const cleanLabel = dl.label ? dl.label.replace(/[^\w\s&'-]/g,'').trim() : '';
+            storeName = cleanLabel || "Applebee's";
+            // shorten label like "10 FOR 30 DEALS" -> use store as "Munchies"
+            if (dl.short === '10for30' && !od.store) storeName = "Applebee's";
+            if (dl.short === 'ubereats' && !od.store) storeName = "Uber Eats Store";
+            if (dl.short === 'doordash' && !od.store) storeName = "DoorDash Store";
+          }
+          // Totals
+          let rawTotal = (od.total && String(od.total).trim()) ? String(od.total).trim() : null;
+          if (!rawTotal) rawTotal = '$8.80';
+          if (!rawTotal.startsWith('$')) rawTotal = '$' + rawTotal.replace('$','');
+          const ctNum = parseFloat(rawTotal.replace(/[^0-9.]/g,'')) || 8.80;
+          const customerTotalStr = `$${ctNum.toFixed(2)}`;
+          const beforeNum = ctNum / 0.4; // 60% off => customer pays 40%
+          const beforeDiscountStr = `$${beforeNum.toFixed(2)}`;
+          const savingsStr = `$${(beforeNum - ctNum).toFixed(2)}`;
+          const promoMap = { '10for30': '10 for 30', 'doordash': 'Budget Bites · 60% off', 'ubereats': 'Budget Bites · 60% off' };
+          const promo = promoMap[dl.short] || 'Budget Bites · 60% off';
+          const orderId = `BB-${Math.floor(1000 + Math.random()*9000)}`;
+          const scContainer = buildSuccessfulCheckoutContainer({
+            store: storeName,
+            customerId: customerId || interaction.user.id,
+            chefId: interaction.user.id,
+            customerTotalStr,
+            beforeDiscountStr,
+            savingsStr,
+            promo,
+            orderId
+          });
+          await scChannel.send({ components: [scContainer], flags: MessageFlagsBitField.Flags.IsComponentsV2 }).catch(e=>console.log('[sc] send fail', e.message));
+          console.log(`[sc] logged to #${scChannel.name}`);
+        } else {
+          console.log('[sc] channel "successful checkouts" not found - skipping log');
+        }
+      } catch(e){ console.log('[sc] error', e.message); }
       console.log(`[✔] /complete by ${interaction.user.tag} +$2 bal $${newBal} total ${totalOrders} rating for ${customerId}`);
       return;
     }
