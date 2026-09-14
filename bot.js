@@ -156,7 +156,7 @@ function getUserPayments(uid) {
 }
 function hasPaymentMethods(uid) {
   const p = getUserPayments(uid);
-  return !!(p.venmo || p.paypal || p.chime || p.card || p.zelle || p.crypto || p.other);
+  return !!(p.venmo || p.paypal || p.chime || p.card || p.zelle || p.cashapp || p.crypto || p.other);
 }
 function buildPaymentMethodsList(uid) {
   const p = getUserPayments(uid);
@@ -166,6 +166,7 @@ function buildPaymentMethodsList(uid) {
   if (p.chime) methods.push(`**Chime:** \`${p.chime}\``);
   if (p.card) methods.push(`**Card:** \`${p.card}\``);
   if (p.zelle) methods.push(`**Zelle:** \`${p.zelle}\``);
+  if (p.cashapp) methods.push(`**CashApp:** \`${p.cashapp}\``);
   if (p.crypto) methods.push(`**Crypto:** \`${p.crypto}\``);
   if (p.other) methods.push(`**Other:** \`${p.other}\``);
   return methods;
@@ -2122,7 +2123,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Header: 🚀 Payment Request + money thumbnail on right
       const header = new SectionBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🚀 **Payment Request**`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/8sF6mMVUbLkAAAAC/money-dollars.gif').setDescription('money'));
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://cdn-icons-png.flaticon.com/512/3135/3135706.png').setDescription('money'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       // Total — big, bold
@@ -2170,7 +2171,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Header — matches screenshot: 🍔 Payment Methods + money stack thumbnail
       const header = new SectionBuilder()
         .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🍔 Payment Methods\nManage your payment information:`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/3Sjorb-yuCEAAAAC/cash-money.gif').setDescription('payments'));
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://cdn-icons-png.flaticon.com/512/3135/3135714.png').setDescription('payments'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       // Available Actions — matches screenshot format
@@ -2205,12 +2206,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const modal = new ModalBuilder()
         .setCustomId('pay_set_modal')
         .setTitle('Enter Your Payment Info');
-      const warn = new TextInputBuilder().setCustomId('warn').setLabel('⚠️ Do not share passwords or sensitive info.').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder('This is just for payment coordination').setMaxLength(10);
       const venmo = new TextInputBuilder().setCustomId('venmo').setLabel('Venmo').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Venmo or leave blank').setMaxLength(100);
       const paypal = new TextInputBuilder().setCustomId('paypal').setLabel('Paypal').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Paypal or leave blank').setMaxLength(100);
       const chime = new TextInputBuilder().setCustomId('chime').setLabel('Chime').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Chime or leave blank').setMaxLength(100);
       const card = new TextInputBuilder().setCustomId('card').setLabel('Card').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Card or leave blank').setMaxLength(100);
       const zelle = new TextInputBuilder().setCustomId('zelle').setLabel('Zelle').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Zelle or leave blank').setMaxLength(100);
+      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashTag').setMaxLength(100);
       modal.addComponents(
         new ActionRowBuilder().addComponents(venmo),
         new ActionRowBuilder().addComponents(paypal),
@@ -2218,11 +2219,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new ActionRowBuilder().addComponents(card),
         new ActionRowBuilder().addComponents(zelle),
       );
+      // CashApp added as second modal page via interaction followUp
       await interaction.showModal(modal);
+      // After first modal, show second for CashApp
       return;
     }
 
-    // === MODAL: Set Payment Info submit ===
+    // === MODAL: Set Payment Info submit (page 1) ===
     if (interaction.isModalSubmit() && interaction.customId === 'pay_set_modal') {
       const uid = interaction.user.id;
       const p = getUserPayments(uid);
@@ -2233,12 +2236,35 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (val) { p[f] = val; saved.push(f.charAt(0).toUpperCase()+f.slice(1)); }
       }
       savePayments();
+      // Show second modal for CashApp
+      const modal2 = new ModalBuilder()
+        .setCustomId('pay_set_modal2')
+        .setTitle('Payment Info (continued)');
+      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashTag').setMaxLength(100);
+      modal2.addComponents(new ActionRowBuilder().addComponents(cashapp));
+      await interaction.showModal(modal2);
+      return;
+    }
+
+    // === MODAL: Set Payment Info submit (page 2 — CashApp) ===
+    if (interaction.isModalSubmit() && interaction.customId === 'pay_set_modal2') {
+      const uid = interaction.user.id;
+      const p = getUserPayments(uid);
+      const cashapp = interaction.fields.getTextInputValue('cashapp')?.trim();
+      let allSaved = [];
+      if (p.venmo) allSaved.push('Venmo');
+      if (p.paypal) allSaved.push('PayPal');
+      if (p.chime) allSaved.push('Chime');
+      if (p.card) allSaved.push('Card');
+      if (p.zelle) allSaved.push('Zelle');
+      if (cashapp) { p.cashapp = cashapp; allSaved.push('CashApp'); }
+      savePayments();
       const container = new ContainerBuilder().setAccentColor(0x57F287);
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Payment Methods Updated`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      if (saved.length) {
+      if (allSaved.length) {
         container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-          `**Saved methods:** ${saved.join(', ')}\nUse \`/payments\` to manage or update.`
+          `**Saved methods:** ${allSaved.join(', ')}\nUse \`/payments\` to manage or update.`
         ));
       } else {
         container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`No methods were entered. Use \`/payments\` to try again.`));
