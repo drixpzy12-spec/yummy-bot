@@ -156,17 +156,16 @@ function getUserPayments(uid) {
 }
 function hasPaymentMethods(uid) {
   const p = getUserPayments(uid);
-  return !!(p.venmo || p.paypal || p.chime || p.card || p.zelle || p.cashapp || p.crypto || p.other);
+  return !!(p.venmo || p.chime || p.card || p.zelle || p.cashapp || p.crypto || p.other);
 }
 function buildPaymentMethodsList(uid) {
   const p = getUserPayments(uid);
   const methods = [];
   if (p.venmo) methods.push(`**Venmo:** \`${p.venmo}\``);
-  if (p.paypal) methods.push(`**PayPal:** \`${p.paypal}\``);
+  if (p.cashapp) methods.push(`**CashApp:** \`${p.cashapp}\``);
   if (p.chime) methods.push(`**Chime:** \`${p.chime}\``);
   if (p.card) methods.push(`**Card:** \`${p.card}\``);
   if (p.zelle) methods.push(`**Zelle:** \`${p.zelle}\``);
-  if (p.cashapp) methods.push(`**CashApp:** \`${p.cashapp}\``);
   if (p.crypto) methods.push(`**Crypto:** \`${p.crypto}\``);
   if (p.other) methods.push(`**Other:** \`${p.other}\``);
   return methods;
@@ -2126,8 +2125,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://cdn-icons-png.flaticon.com/512/3135/3135706.png').setDescription('money'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      // Total — big, bold
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`💵 **Total: ${amountStr}**`));
+      // Total — h1 big, bold like screenshot
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`💵 # Total: ${amountStr}`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
       // Screenshot instruction
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`☁️ Please provide a **screenshot of payment** when sent`));
@@ -2207,64 +2206,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setCustomId('pay_set_modal')
         .setTitle('Enter Your Payment Info');
       const venmo = new TextInputBuilder().setCustomId('venmo').setLabel('Venmo').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Venmo or leave blank').setMaxLength(100);
-      const paypal = new TextInputBuilder().setCustomId('paypal').setLabel('Paypal').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Paypal or leave blank').setMaxLength(100);
+      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashTag').setMaxLength(100);
       const chime = new TextInputBuilder().setCustomId('chime').setLabel('Chime').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Chime or leave blank').setMaxLength(100);
       const card = new TextInputBuilder().setCustomId('card').setLabel('Card').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Card or leave blank').setMaxLength(100);
       const zelle = new TextInputBuilder().setCustomId('zelle').setLabel('Zelle').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Zelle or leave blank').setMaxLength(100);
-      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashTag').setMaxLength(100);
       modal.addComponents(
         new ActionRowBuilder().addComponents(venmo),
-        new ActionRowBuilder().addComponents(paypal),
+        new ActionRowBuilder().addComponents(cashapp),
         new ActionRowBuilder().addComponents(chime),
         new ActionRowBuilder().addComponents(card),
         new ActionRowBuilder().addComponents(zelle),
       );
-      // CashApp added as second modal page via interaction followUp
       await interaction.showModal(modal);
-      // After first modal, show second for CashApp
       return;
     }
 
-    // === MODAL: Set Payment Info submit (page 1) ===
+    // === MODAL: Set Payment Info submit ===
     if (interaction.isModalSubmit() && interaction.customId === 'pay_set_modal') {
       const uid = interaction.user.id;
       const p = getUserPayments(uid);
-      const fields = ['venmo','paypal','chime','card','zelle'];
+      const fields = ['venmo','cashapp','chime','card','zelle'];
       let saved = [];
       for (const f of fields) {
         const val = interaction.fields.getTextInputValue(f)?.trim();
         if (val) { p[f] = val; saved.push(f.charAt(0).toUpperCase()+f.slice(1)); }
       }
       savePayments();
-      // Show second modal for CashApp
-      const modal2 = new ModalBuilder()
-        .setCustomId('pay_set_modal2')
-        .setTitle('Payment Info (continued)');
-      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashTag').setMaxLength(100);
-      modal2.addComponents(new ActionRowBuilder().addComponents(cashapp));
-      await interaction.showModal(modal2);
-      return;
-    }
-
-    // === MODAL: Set Payment Info submit (page 2 — CashApp) ===
-    if (interaction.isModalSubmit() && interaction.customId === 'pay_set_modal2') {
-      const uid = interaction.user.id;
-      const p = getUserPayments(uid);
-      const cashapp = interaction.fields.getTextInputValue('cashapp')?.trim();
-      let allSaved = [];
-      if (p.venmo) allSaved.push('Venmo');
-      if (p.paypal) allSaved.push('PayPal');
-      if (p.chime) allSaved.push('Chime');
-      if (p.card) allSaved.push('Card');
-      if (p.zelle) allSaved.push('Zelle');
-      if (cashapp) { p.cashapp = cashapp; allSaved.push('CashApp'); }
-      savePayments();
       const container = new ContainerBuilder().setAccentColor(0x57F287);
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Payment Methods Updated`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      if (allSaved.length) {
+      if (saved.length) {
         container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-          `**Saved methods:** ${allSaved.join(', ')}\nUse \`/payments\` to manage or update.`
+          `**Saved methods:** ${saved.join(', ')}\nUse \`/payments\` to manage or update.`
         ));
       } else {
         container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`No methods were entered. Use \`/payments\` to try again.`));
@@ -2350,7 +2323,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const p = getUserPayments(interaction.user.id);
       const existing = [];
       if (p.venmo) existing.push({ label: 'Venmo', value: 'venmo', description: p.venmo });
-      if (p.paypal) existing.push({ label: 'PayPal', value: 'paypal', description: p.paypal });
+      if (p.cashapp) existing.push({ label: 'CashApp', value: 'cashapp', description: p.cashapp });
       if (p.chime) existing.push({ label: 'Chime', value: 'chime', description: p.chime });
       if (p.card) existing.push({ label: 'Card', value: 'card', description: p.card });
       if (p.zelle) existing.push({ label: 'Zelle', value: 'zelle', description: p.zelle });
