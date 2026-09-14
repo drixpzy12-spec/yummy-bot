@@ -2117,25 +2117,26 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const customerMention = interaction.channel.topic?.match(/\b\d{17,20}\b/)?.[0]
         ? `<@${interaction.channel.topic.match(/\b\d{17,20}\b/)[0]}>`
         : 'Customer';
-      // Payment Request card like screenshot
-      const container = new ContainerBuilder().setAccentColor(0x2B2D31);
-      // Header with money emoji
+      // Payment Request card — matches screenshot: green accent, compact layout
+      const container = new ContainerBuilder().setAccentColor(0x3BA55C);
+      // Header: 🚀 Payment Request + money thumbnail on right
       const header = new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🧾 **Payment Request**`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/Dn9g4y2nPT8AAAAC/money-wad.gif').setDescription('money'));
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🚀 **Payment Request**`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/8sF6mMVUbLkAAAAC/money-dollars.gif').setDescription('money'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      // Total
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💵 Total: ${amountStr}`));
+      // Total — big, bold
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`💵 **Total: ${amountStr}**`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
-      // Instructions
+      // Screenshot instruction
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`☁️ Please provide a **screenshot of payment** when sent`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
       // Note
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`⚠️ **Note:** After an order is placed, refunds will **only** be provided for canceled orders`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      // Footer
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${customerMention} • Sent by ${interaction.user.username}`));
-      // Card button — shows user's payment methods when clicked
+      // Card button
       const cardRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('bill_card_view').setLabel('Card').setStyle(ButtonStyle.Secondary).setEmoji('💳')
       );
@@ -2166,18 +2167,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const methods = buildPaymentMethodsList(uid);
       const hasMethods = methods.length > 0;
       const container = new ContainerBuilder().setAccentColor(0x57F287);
-      // Header with money emoji
+      // Header — matches screenshot: 🍔 Payment Methods + money stack thumbnail
       const header = new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💵 Payment Methods\nManage your payment information:`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/t4OuYR-2lEsAAAAC/money-cash.gif').setDescription('payments'));
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🍔 Payment Methods\nManage your payment information:`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/3Sjorb-yuCEAAAAC/cash-money.gif').setDescription('payments'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      // Available Actions
+      // Available Actions — matches screenshot format
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `**Available Actions**\n` +
         `🔧 **Set Payment Info** - Add Venmo, Paypal, Chime, Card, Zelle\n` +
         `📝 **Other Methods** - Add Other Payments\n` +
-        `₿ **Setup Crypto** - Add Crypto Addresses\n` +
+        `💰 **Setup Crypto** - Add Crypto Addresses\n` +
         `🗑️ **Remove Payment** - Remove specific payment methods\n` +
         `🚮 **Clear All** - Remove all payment methods`
       ));
