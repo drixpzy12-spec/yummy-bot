@@ -2125,8 +2125,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://cdn-icons-png.flaticon.com/512/3135/3135706.png').setDescription('money'));
       container.addSectionComponents(header);
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-      // Total — h1 big, bold like screenshot
-      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`💵 # Total: ${amountStr}`));
+      // Total — big, bold, h2 heading
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`💵 ## Total: ${amountStr}`));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
       // Screenshot instruction
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`☁️ Please provide a **screenshot of payment** when sent`));
