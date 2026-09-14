@@ -145,6 +145,31 @@ function saveClock() {
   dbSet('clock', { clockedIn: [...clockedIn] });
   saveToDiscord('clock', { clockedIn: [...clockedIn] });
 }
+// User payment methods - persistent per-user
+const PAYMENTS_FILE = path.join(DATA_DIR, 'user_payments.json');
+let userPayments = {}; // userId -> { venmo, paypal, chime, card, zelle, crypto, other }
+try { if (fs.existsSync(PAYMENTS_FILE)) userPayments = JSON.parse(fs.readFileSync(PAYMENTS_FILE, 'utf8')); } catch {}
+function savePayments() { try { fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(userPayments, null, 2)); } catch {} dbSet('user_payments', userPayments); saveToDiscord('user_payments', userPayments); }
+function getUserPayments(uid) {
+  if (!userPayments[uid]) userPayments[uid] = {};
+  return userPayments[uid];
+}
+function hasPaymentMethods(uid) {
+  const p = getUserPayments(uid);
+  return !!(p.venmo || p.paypal || p.chime || p.card || p.zelle || p.crypto || p.other);
+}
+function buildPaymentMethodsList(uid) {
+  const p = getUserPayments(uid);
+  const methods = [];
+  if (p.venmo) methods.push(`**Venmo:** \`${p.venmo}\``);
+  if (p.paypal) methods.push(`**PayPal:** \`${p.paypal}\``);
+  if (p.chime) methods.push(`**Chime:** \`${p.chime}\``);
+  if (p.card) methods.push(`**Card:** \`${p.card}\``);
+  if (p.zelle) methods.push(`**Zelle:** \`${p.zelle}\``);
+  if (p.crypto) methods.push(`**Crypto:** \`${p.crypto}\``);
+  if (p.other) methods.push(`**Other:** \`${p.other}\``);
+  return methods;
+}
 function getChefPings() {
   if (clockedIn.size === 0) return '';
   return [...clockedIn].map(id => `<@${id}>`).join(' ');
@@ -910,6 +935,16 @@ const commands = [
     .setDescription('Check your vouch points (or another user)')
     .addUserOption(o => o.setName('user').setDescription('User to check (Admin/Chef can check others)').setRequired(false))
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('bill')
+    .setDescription('Send a payment request card (Chef/Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addNumberOption(o => o.setName('amount').setDescription('Amount to request (e.g. 15.00)').setRequired(true).setMinValue(0.01))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('payments')
+    .setDescription('Manage your payment methods (Venmo, PayPal, Chime, Card, Zelle)')
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -968,7 +1003,9 @@ client.once(Events.ClientReady, async () => {
       }
       const cr = await dbGet('chef_ratings', null);
       if (cr && typeof cr === 'object') chefRatings = cr;
-      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length}`);
+      const up = await dbGet('user_payments', null);
+      if (up && typeof up === 'object') userPayments = up;
+      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length} payments=${Object.keys(userPayments).length}`);
     } catch(e){ console.log('[DB] load fail', e.message); }
   }
   await loadFromDiscord().catch(()=>{});
@@ -2066,6 +2103,274 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# User ID: \`${uid}\``));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /bill (Chef/Admin sends payment request) ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'bill') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator) && !hasChefPermission(interaction.member, interaction.guild)) {
+        await interaction.reply({ content: '❌ Only Chefs/Admins can use `/bill`.', ephemeral: true });
+        return;
+      }
+      const amount = interaction.options.getNumber('amount');
+      const amountStr = `$${amount.toFixed(2)}`;
+      const customerMention = interaction.channel.topic?.match(/\b\d{17,20}\b/)?.[0]
+        ? `<@${interaction.channel.topic.match(/\b\d{17,20}\b/)[0]}>`
+        : 'Customer';
+      // Payment Request card like screenshot
+      const container = new ContainerBuilder().setAccentColor(0x2B2D31);
+      // Header with money emoji
+      const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`🧾 **Payment Request**`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/Dn9g4y2nPT8AAAAC/money-wad.gif').setDescription('money'));
+      container.addSectionComponents(header);
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      // Total
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💵 Total: ${amountStr}`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+      // Instructions
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`☁️ Please provide a **screenshot of payment** when sent`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+      // Note
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`⚠️ **Note:** After an order is placed, refunds will **only** be provided for canceled orders`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# ${customerMention} • Sent by ${interaction.user.username}`));
+      // Card button — shows user's payment methods when clicked
+      const cardRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('bill_card_view').setLabel('Card').setStyle(ButtonStyle.Secondary).setEmoji('💳')
+      );
+      container.addActionRowComponents(cardRow);
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+      return;
+    }
+
+    // === BUTTON: Card view on /bill (ephemeral — shows sender's payment methods) ===
+    if (interaction.isButton() && interaction.customId === 'bill_card_view') {
+      const methods = buildPaymentMethodsList(interaction.user.id);
+      if (!methods.length) {
+        await interaction.reply({ content: '💳 You haven\'t set up payment methods yet. Use `/payments` to add them.', ephemeral: true });
+        return;
+      }
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💳 Payment Methods — ${interaction.user.username}`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(methods.join('\n')));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Use \`/payments\` to update`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /payments (user payment method manager) ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'payments') {
+      const uid = interaction.user.id;
+      const methods = buildPaymentMethodsList(uid);
+      const hasMethods = methods.length > 0;
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      // Header with money emoji
+      const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 💵 Payment Methods\nManage your payment information:`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/t4OuYR-2lEsAAAAC/money-cash.gif').setDescription('payments'));
+      container.addSectionComponents(header);
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      // Available Actions
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        `**Available Actions**\n` +
+        `🔧 **Set Payment Info** - Add Venmo, Paypal, Chime, Card, Zelle\n` +
+        `📝 **Other Methods** - Add Other Payments\n` +
+        `₿ **Setup Crypto** - Add Crypto Addresses\n` +
+        `🗑️ **Remove Payment** - Remove specific payment methods\n` +
+        `🚮 **Clear All** - Remove all payment methods`
+      ));
+      // Show current methods
+      if (hasMethods) {
+        container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Your Methods:**\n${methods.join('\n')}`));
+      }
+      // Buttons
+      const btnRow1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('pay_set').setLabel('Set Payment Info').setStyle(ButtonStyle.Success).setEmoji('➕'),
+        new ButtonBuilder().setCustomId('pay_remove').setLabel('Remove Payment').setStyle(ButtonStyle.Danger).setEmoji('➖'),
+        new ButtonBuilder().setCustomId('pay_clear').setLabel('Clear All').setStyle(ButtonStyle.Secondary).setEmoji('🚮'),
+        new ButtonBuilder().setCustomId('pay_crypto').setLabel('Setup Crypto').setStyle(ButtonStyle.Primary).setEmoji('₿'),
+        new ButtonBuilder().setCustomId('pay_other').setLabel('Other Methods').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
+      );
+      container.addActionRowComponents(btnRow1);
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === BUTTON: Set Payment Info (modal) ===
+    if (interaction.isButton() && interaction.customId === 'pay_set') {
+      const modal = new ModalBuilder()
+        .setCustomId('pay_set_modal')
+        .setTitle('Enter Your Payment Info');
+      const warn = new TextInputBuilder().setCustomId('warn').setLabel('⚠️ Do not share passwords or sensitive info.').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder('This is just for payment coordination').setMaxLength(10);
+      const venmo = new TextInputBuilder().setCustomId('venmo').setLabel('Venmo').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Venmo or leave blank').setMaxLength(100);
+      const paypal = new TextInputBuilder().setCustomId('paypal').setLabel('Paypal').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Paypal or leave blank').setMaxLength(100);
+      const chime = new TextInputBuilder().setCustomId('chime').setLabel('Chime').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Chime or leave blank').setMaxLength(100);
+      const card = new TextInputBuilder().setCustomId('card').setLabel('Card').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Card or leave blank').setMaxLength(100);
+      const zelle = new TextInputBuilder().setCustomId('zelle').setLabel('Zelle').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('Enter your Zelle or leave blank').setMaxLength(100);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(venmo),
+        new ActionRowBuilder().addComponents(paypal),
+        new ActionRowBuilder().addComponents(chime),
+        new ActionRowBuilder().addComponents(card),
+        new ActionRowBuilder().addComponents(zelle),
+      );
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // === MODAL: Set Payment Info submit ===
+    if (interaction.isModalSubmit() && interaction.customId === 'pay_set_modal') {
+      const uid = interaction.user.id;
+      const p = getUserPayments(uid);
+      const fields = ['venmo','paypal','chime','card','zelle'];
+      let saved = [];
+      for (const f of fields) {
+        const val = interaction.fields.getTextInputValue(f)?.trim();
+        if (val) { p[f] = val; saved.push(f.charAt(0).toUpperCase()+f.slice(1)); }
+      }
+      savePayments();
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Payment Methods Updated`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      if (saved.length) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+          `**Saved methods:** ${saved.join(', ')}\nUse \`/payments\` to manage or update.`
+        ));
+      } else {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`No methods were entered. Use \`/payments\` to try again.`));
+      }
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === BUTTON: Setup Crypto (modal) ===
+    if (interaction.isButton() && interaction.customId === 'pay_crypto') {
+      const modal = new ModalBuilder()
+        .setCustomId('pay_crypto_modal')
+        .setTitle('Setup Crypto Addresses');
+      const btc = new TextInputBuilder().setCustomId('btc').setLabel('Bitcoin (BTC)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('BTC address').setMaxLength(100);
+      const eth = new TextInputBuilder().setCustomId('eth').setLabel('Ethereum (ETH)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('ETH address').setMaxLength(100);
+      const ltc = new TextInputBuilder().setCustomId('ltc').setLabel('Litecoin (LTC)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('LTC address').setMaxLength(100);
+      const usdt = new TextInputBuilder().setCustomId('usdt').setLabel('USDT (TRC20)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('USDT TRC20 address').setMaxLength(100);
+      const cashapp = new TextInputBuilder().setCustomId('cashapp').setLabel('CashApp $cashtag').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder('$YourCashtag').setMaxLength(100);
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(btc),
+        new ActionRowBuilder().addComponents(eth),
+        new ActionRowBuilder().addComponents(ltc),
+        new ActionRowBuilder().addComponents(usdt),
+        new ActionRowBuilder().addComponents(cashapp),
+      );
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // === MODAL: Crypto submit ===
+    if (interaction.isModalSubmit() && interaction.customId === 'pay_crypto_modal') {
+      const uid = interaction.user.id;
+      const p = getUserPayments(uid);
+      const fields = ['btc','eth','ltc','usdt','cashapp'];
+      let saved = [];
+      for (const f of fields) {
+        const val = interaction.fields.getTextInputValue(f)?.trim();
+        if (val) { saved.push(`${f.toUpperCase()}: \`${val}\``); }
+      }
+      // store as single crypto string
+      if (saved.length) p.crypto = saved.join(' • ');
+      savePayments();
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Crypto Addresses Updated`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      if (saved.length) {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+          `**Saved:**\n${saved.join('\n')}\n\nUse \`/payments\` to manage.`
+        ));
+      } else {
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`No crypto addresses entered. Use \`/payments\` to try again.`));
+      }
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === BUTTON: Other Methods (modal) ===
+    if (interaction.isButton() && interaction.customId === 'pay_other') {
+      const modal = new ModalBuilder()
+        .setCustomId('pay_other_modal')
+        .setTitle('Other Payment Methods');
+      const other = new TextInputBuilder().setCustomId('other').setLabel('Other payment method').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('e.g. Apple Pay, Google Pay, Cash, etc.').setMaxLength(300);
+      modal.addComponents(new ActionRowBuilder().addComponents(other));
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // === MODAL: Other Methods submit ===
+    if (interaction.isModalSubmit() && interaction.customId === 'pay_other_modal') {
+      const uid = interaction.user.id;
+      const p = getUserPayments(uid);
+      const val = interaction.fields.getTextInputValue('other')?.trim();
+      if (val) p.other = val;
+      savePayments();
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Other Methods Updated\n**Saved:** \`${val || 'none'}\`\nUse \`/payments\` to manage.`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === BUTTON: Remove Payment (ephemeral selector) ===
+    if (interaction.isButton() && interaction.customId === 'pay_remove') {
+      const p = getUserPayments(interaction.user.id);
+      const existing = [];
+      if (p.venmo) existing.push({ label: 'Venmo', value: 'venmo', description: p.venmo });
+      if (p.paypal) existing.push({ label: 'PayPal', value: 'paypal', description: p.paypal });
+      if (p.chime) existing.push({ label: 'Chime', value: 'chime', description: p.chime });
+      if (p.card) existing.push({ label: 'Card', value: 'card', description: p.card });
+      if (p.zelle) existing.push({ label: 'Zelle', value: 'zelle', description: p.zelle });
+      if (p.crypto) existing.push({ label: 'Crypto', value: 'crypto', description: p.crypto });
+      if (p.other) existing.push({ label: 'Other', value: 'other', description: p.other });
+      if (!existing.length) {
+        await interaction.reply({ content: '🗑️ No payment methods to remove. Use `/payments` to set some up.', ephemeral: true });
+        return;
+      }
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('pay_remove_select')
+        .setPlaceholder('Select methods to remove...')
+        .setMinValues(1)
+        .setMaxValues(existing.length)
+        .addOptions(existing);
+      const row = new ActionRowBuilder().addComponents(menu);
+      await interaction.reply({ components: [row], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SELECT MENU: Remove selected payment methods ===
+    if (interaction.isStringSelectMenu() && interaction.customId === 'pay_remove_select') {
+      const p = getUserPayments(interaction.user.id);
+      const removed = [];
+      for (const key of interaction.values) {
+        if (p[key]) { removed.push(key.charAt(0).toUpperCase()+key.slice(1)); delete p[key]; }
+      }
+      savePayments();
+      const container = new ContainerBuilder().setAccentColor(0xE74C3C);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🗑️ Removed ${removed.join(', ')}\nUse \`/payments\` to manage.`));
+      await interaction.update({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
+      return;
+    }
+
+    // === BUTTON: Clear All Payment Methods ===
+    if (interaction.isButton() && interaction.customId === 'pay_clear') {
+      const p = getUserPayments(interaction.user.id);
+      const hadMethods = hasPaymentMethods(interaction.user.id);
+      userPayments[interaction.user.id] = {};
+      savePayments();
+      const container = new ContainerBuilder().setAccentColor(hadMethods ? 0xE74C3C : 0x95A5A6);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
+        hadMethods
+          ? `## 🚮 All payment methods cleared\nUse \`/payments\` to set new ones.`
+          : `## 🚮 No methods were set\nUse \`/payments\` to add some.`
+      ));
+      await interaction.update({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2 });
       return;
     }
 
