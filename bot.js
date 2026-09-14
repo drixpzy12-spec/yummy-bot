@@ -2191,7 +2191,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         new ButtonBuilder().setCustomId('pay_set').setLabel('Set Payment Info').setStyle(ButtonStyle.Success).setEmoji('➕'),
         new ButtonBuilder().setCustomId('pay_remove').setLabel('Remove Payment').setStyle(ButtonStyle.Danger).setEmoji('➖'),
         new ButtonBuilder().setCustomId('pay_clear').setLabel('Clear All').setStyle(ButtonStyle.Secondary).setEmoji('🚮'),
-        new ButtonBuilder().setCustomId('pay_crypto').setLabel('Setup Crypto').setStyle(ButtonStyle.Primary).setEmoji('₿'),
+        new ButtonBuilder().setCustomId('pay_crypto').setLabel('Setup Crypto').setStyle(ButtonStyle.Primary).setEmoji('💰'),
         new ButtonBuilder().setCustomId('pay_other').setLabel('Other Methods').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
       );
       container.addActionRowComponents(btnRow1);
