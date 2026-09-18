@@ -174,13 +174,31 @@ function getChefPings() {
   if (clockedIn.size === 0) return '';
   return [...clockedIn].map(id => `<@${id}>`).join(' ');
 }
-// Balances for chefs - $2 per complete
+// Balances for chefs - configurable fee per complete
 const BALANCE_FILE = path.join(DATA_DIR, 'chef_balances.json');
 let chefBalances = {};
 try {
   if (fs.existsSync(BALANCE_FILE)) chefBalances = JSON.parse(fs.readFileSync(BALANCE_FILE, 'utf8'));
 } catch {}
 function saveBalances() { try { fs.writeFileSync(BALANCE_FILE, JSON.stringify(chefBalances, null, 2)); } catch {} dbSet('chef_balances', chefBalances); saveToDiscord('chef_balances', chefBalances); }
+function getChefBalance(uid) {
+  if (!chefBalances[uid]) chefBalances[uid] = { balance: 0, totalOrders: 0 };
+  return chefBalances[uid];
+}
+// Chef fee per order (configurable, default $2)
+const FEE_FILE = path.join(DATA_DIR, 'chef_fee.json');
+let chefFee = 2;
+try {
+  if (fs.existsSync(FEE_FILE)) {
+    const data = JSON.parse(fs.readFileSync(FEE_FILE, 'utf8'));
+    if (typeof data.fee === 'number') chefFee = data.fee;
+  }
+} catch {}
+function saveFee() {
+  try { fs.writeFileSync(FEE_FILE, JSON.stringify({ fee: chefFee }, null, 2)); } catch {}
+  dbSet('chef_fee', { fee: chefFee });
+  saveToDiscord('chef_fee', { fee: chefFee });
+}
 function getChefBalance(uid) {
   if (!chefBalances[uid]) chefBalances[uid] = { balance: 0, totalOrders: 0 };
   return chefBalances[uid];
@@ -945,6 +963,16 @@ const commands = [
     .setName('payments')
     .setDescription('Manage your payment methods (Venmo, PayPal, Chime, Card, Zelle)')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('fee')
+    .setDescription('Set chef fee per order (Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.Administrator)
+    .addNumberOption(o => o.setName('amount').setDescription('Fee per order (e.g. 2.50)').setRequired(true).setMinValue(0.01).setMaxValue(100))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('leaderboard')
+    .setDescription('Show chef leaderboard with stats')
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -1005,7 +1033,9 @@ client.once(Events.ClientReady, async () => {
       if (cr && typeof cr === 'object') chefRatings = cr;
       const up = await dbGet('user_payments', null);
       if (up && typeof up === 'object') userPayments = up;
-      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length} payments=${Object.keys(userPayments).length}`);
+      const cf = await dbGet('chef_fee', null);
+      if (cf && typeof cf.fee === 'number') chefFee = cf.fee;
+      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length} payments=${Object.keys(userPayments).length} fee=${chefFee}`);
     } catch(e){ console.log('[DB] load fail', e.message); }
   }
   await loadFromDiscord().catch(()=>{});
@@ -1715,7 +1745,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const chefMention = `<@${interaction.user.id}>`;
       // Update balance
       const bal = getChefBalance(interaction.user.id);
-      bal.balance += 2;
+      bal.balance += chefFee;
       bal.totalOrders += 1;
       saveBalances();
       logOrderToday(interaction.user.id);
@@ -2019,6 +2049,72 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(topLines.join('\n')));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Munchies`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
+      return;
+    }
+
+    // === SLASH: /fee (Admin only) ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'fee') {
+      const amount = interaction.options.getNumber('amount');
+      chefFee = amount;
+      saveFee();
+      const container = new ContainerBuilder().setAccentColor(0x57F287);
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Chef Fee Updated`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**New fee per order:** \`$${chefFee.toFixed(2)}\`\n*Applies to all future /complete actions*`));
+      await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: true });
+      return;
+    }
+
+    // === SLASH: /leaderboard (Chef Leaderboard) ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'leaderboard') {
+      const guild = interaction.guild;
+      // Get all chefs with balances
+      const chefEntries = Object.entries(chefBalances).filter(([, bal]) => bal.totalOrders > 0);
+      if (chefEntries.length === 0) {
+        await interaction.reply({ content: 'No chef data yet.', ephemeral: true });
+        return;
+      }
+      // Sort by total orders descending
+      chefEntries.sort((a, b) => b[1].totalOrders - a[1].totalOrders);
+      const medals = ['🥇', '🥈', '🥉'];
+      const lines = [];
+      for (let i = 0; i < chefEntries.length; i++) {
+        const [chefId, bal] = chefEntries[i];
+        const member = guild.members.cache.get(chefId);
+        const name = member ? member.displayName : `<@${chefId}>`;
+        const medal = medals[i] || `${i + 1}.`;
+        const avgEarnings = bal.totalOrders > 0 ? (bal.balance / bal.totalOrders).toFixed(2) : '0.00';
+        lines.push(`${medal} **${name}**\n     \`${bal.totalOrders} orders\` • \`$${bal.balance.toFixed(2)} balance\` • \`$${avgEarnings}/order avg\``);
+      }
+      // Also get today's stats
+      const todayStats = getTodayStats();
+      const todayLines = [];
+      if (todayStats.top.length > 0) {
+        for (let i = 0; i < todayStats.top.length; i++) {
+          const [chefId, count] = todayStats.top[i];
+          const member = guild.members.cache.get(chefId);
+          const name = member ? member.displayName : `<@${chefId}>`;
+          const medal = medals[i] || `${i + 1}.`;
+          todayLines.push(`${medal} ${name} - \`${count} orders\``);
+        }
+      }
+      const container = new ContainerBuilder().setAccentColor(0xFFD700);
+      const header = new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🏆 Chef Leaderboard\nAll-time stats • Fee: $${chefFee.toFixed(2)}/order`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL('https://media1.tenor.com/m/Dn9g4y2nPT8AAAAC/money-wad.gif').setDescription('leaderboard'));
+      container.addSectionComponents(header);
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**All-Time Rankings**`));
+      container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(lines.slice(0, 10).join('\n')));
+      if (todayLines.length > 0) {
+        container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Today's Top Chefs**`));
+        container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
+        container.addTextDisplayComponents(new TextDisplayBuilder().setContent(todayLines.join('\n')));
+      }
+      container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Total chefs: ${chefEntries.length} • Updated <t:${Math.floor(Date.now()/1000)}:R>`));
       await interaction.reply({ components: [container], flags: MessageFlagsBitField.Flags.IsComponentsV2, ephemeral: false });
       return;
     }
