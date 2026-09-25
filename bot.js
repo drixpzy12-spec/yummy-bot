@@ -223,6 +223,28 @@ function getClaimCountDebug(uid) {
   return `${all.length} total, ${countClaimedBy(uid)} active (in Claimed)`;
 }
 const ratingStore = new Map(); // ratingMessageId -> { customerId, chefId }
+// Auto-delete users per channel (channelId -> Set<userId>)
+const autoDeleteUsers = new Map();
+function saveAutoDelete() {
+  try { fs.writeFileSync(path.join(DATA_DIR, 'autodelete.json'), JSON.stringify(Object.fromEntries(autoDeleteUsers), null, 2)); } catch {}
+  dbSet('autodelete', Object.fromEntries(autoDeleteUsers));
+  saveToDiscord('autodelete', Object.fromEntries(autoDeleteUsers));
+}
+function loadAutoDelete() {
+  try {
+    if (fs.existsSync(path.join(DATA_DIR, 'autodelete.json'))) {
+      const data = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'autodelete.json'), 'utf8'));
+      for (const [k, v] of Object.entries(data)) {
+        autoDeleteUsers.set(k, new Set(v));
+      }
+    }
+  } catch {}
+}
+loadAutoDelete();
+function getAutoDeleteUsers(channelId) {
+  if (!autoDeleteUsers.has(channelId)) autoDeleteUsers.set(channelId, new Set());
+  return autoDeleteUsers.get(channelId);
+}
 // Chef ratings - persistent star ratings
 const RATINGS_FILE = path.join(DATA_DIR, 'chef_ratings.json');
 let chefRatings = {}; // chefId -> { totalStars, count, avg, distribution:{1:0..5:0} }
@@ -973,6 +995,22 @@ const commands = [
     .setName('leaderboard')
     .setDescription('Show chef leaderboard with stats')
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName('autodelete')
+    .setDescription('Auto-delete messages from specific users in this ticket (Chef/Admin only)')
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
+    .addSubcommand(sc => sc
+      .setName('add')
+      .setDescription('Add a user to auto-delete list')
+      .addUserOption(o => o.setName('user').setDescription('User to auto-delete').setRequired(true)))
+    .addSubcommand(sc => sc
+      .setName('remove')
+      .setDescription('Remove a user from auto-delete list')
+      .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)))
+    .addSubcommand(sc => sc
+      .setName('list')
+      .setDescription('List users on auto-delete list'))
+    .toJSON(),
 ];
 
 async function registerCommands(guilds) {
@@ -1035,7 +1073,13 @@ client.once(Events.ClientReady, async () => {
       if (up && typeof up === 'object') userPayments = up;
       const cf = await dbGet('chef_fee', null);
       if (cf && typeof cf.fee === 'number') chefFee = cf.fee;
-      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length} payments=${Object.keys(userPayments).length} fee=${chefFee}`);
+      const ad = await dbGet('autodelete', null);
+      if (ad && typeof ad === 'object') {
+        for (const [k, v] of Object.entries(ad)) {
+          autoDeleteUsers.set(k, new Set(v));
+        }
+      }
+      console.log(`[DB] loaded balances=${Object.keys(chefBalances).length} daily=${Object.keys(dailyData).length} claimed=${claimedTickets.size} ratings=${Object.keys(chefRatings).length} payments=${Object.keys(userPayments).length} fee=${chefFee} autodelete=${autoDeleteUsers.size}`);
     } catch(e){ console.log('[DB] load fail', e.message); }
   }
   await loadFromDiscord().catch(()=>{});
@@ -2119,6 +2163,52 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    // === SLASH: /autodelete ===
+    if (interaction.isChatInputCommand() && interaction.commandName === 'autodelete') {
+      // Only allow in ticket channels
+      const isTicket = interaction.channel.parentId === TICKET_CATEGORY_ID || interaction.channel.parentId === CLAIMED_CATEGORY_ID;
+      if (!isTicket) {
+        await interaction.reply({ content: '❌ This command can only be used in ticket channels.', ephemeral: true });
+        return;
+      }
+      const sub = interaction.options.getSubcommand();
+      const target = interaction.options.getUser('user');
+      const users = getAutoDeleteUsers(interaction.channelId);
+      if (sub === 'add') {
+        if (target.id === interaction.user.id) {
+          await interaction.reply({ content: '❌ You cannot add yourself to auto-delete.', ephemeral: true });
+          return;
+        }
+        if (target.bot) {
+          await interaction.reply({ content: '❌ Cannot add bots to auto-delete.', ephemeral: true });
+          return;
+        }
+        users.add(target.id);
+        saveAutoDelete();
+        await interaction.reply({ content: `✅ Added <@${target.id}> to auto-delete list. Their messages will be deleted automatically.`, ephemeral: true });
+        return;
+      }
+      if (sub === 'remove') {
+        if (!users.has(target.id)) {
+          await interaction.reply({ content: `⚠️ <@${target.id}> is not on the auto-delete list.`, ephemeral: true });
+          return;
+        }
+        users.delete(target.id);
+        saveAutoDelete();
+        await interaction.reply({ content: `✅ Removed <@${target.id}> from auto-delete list.`, ephemeral: true });
+        return;
+      }
+      if (sub === 'list') {
+        if (users.size === 0) {
+          await interaction.reply({ content: '📋 Auto-delete list is empty.', ephemeral: true });
+          return;
+        }
+        const names = [...users].map(id => `<@${id}>`).join(', ');
+        await interaction.reply({ content: `📋 **Auto-delete list:** ${names}`, ephemeral: true });
+        return;
+      }
+    }
+
     // === SLASH: /vouch ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'vouch') {
       await interaction.deferReply({ ephemeral: true });
@@ -2530,6 +2620,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // Simple prefix command fallback: !panel (Admin only)
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
+  
+  // Auto-delete messages from users on the auto-delete list for this channel
+  if (message.guild) {
+    const isTicket = message.channel.parentId === TICKET_CATEGORY_ID || message.channel.parentId === CLAIMED_CATEGORY_ID;
+    if (isTicket) {
+      const users = getAutoDeleteUsers(message.channelId);
+      if (users.has(message.author.id)) {
+        try {
+          await message.delete().catch(()=>{});
+          console.log(`[autodelete] Deleted message from ${message.author.tag} in ${message.channel.name}`);
+        } catch {}
+      }
+    }
+  }
+  
   if (message.content.trim() === '!panel') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
       return message.reply('❌ Only Admins can use `!panel`.');
