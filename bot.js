@@ -170,6 +170,29 @@ function buildPaymentMethodsList(uid) {
   if (p.other) methods.push(`**Other:** \`${p.other}\``);
   return methods;
 }
+// Safely build a user mention - discord.js throws "not a cached User or Role"
+// if a mention references someone who isn't in the cache (e.g. left the server).
+// Fetch them into cache first; fall back to plain text so nothing resolves.
+async function safeUserMention(guild, id, fallback = '@Unknown') {
+  if (!id) return fallback;
+  try {
+    if (guild) {
+      const m = await guild.members.fetch(id).catch(() => null);
+      if (m && m.user) return m.user.toMention();
+    }
+  } catch {}
+  return `@${id}`;
+}
+// Sync mention that NEVER throws - only emits a real mention when the user is
+// already cached, otherwise falls back to plain "@id" text (no resolution).
+function cachedMention(id, fallback = '@Unknown') {
+  if (!id) return fallback;
+  try {
+    const u = client.users.cache.get(id);
+    if (u) return u.toMention();
+  } catch {}
+  return `@${id}`;
+}
 function getChefPings() {
   if (clockedIn.size === 0) return '';
   return [...clockedIn].map(id => `<@${id}>`).join(' ');
@@ -606,6 +629,13 @@ async function createTicket(guild, user, dealValue, orderData) {
 
   ticketStore.set(channel.id, { deal, orderData, user });
 
+  // Warm the member cache for clocked-in chefs so their <@id> pings resolve.
+  // Without this, a cold cache after a restart throws
+  // "Supplied parameter is not a cached User or Role".
+  try {
+    await Promise.all([...clockedIn].map(id => guild.members.fetch(id).catch(() => null)));
+  } catch {}
+
   const container = buildTicketContainer(deal, orderData, user, null);
   const gifAtt = await getTicketGifAttachment(deal.short);
   const pingIds = [...clockedIn];
@@ -717,11 +747,11 @@ function buildSuccessfulCheckoutContainer({ store, customerId, chefId, customerT
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
   // Row 1
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 🏪 Store  •  👤 Customer  •  💰 Total`));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${store}   <@${customerId}>   \`${customerTotalStr}\``));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ${store}   ${cachedMention(customerId)}   \`${customerTotalStr}\``));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
   // Row 2
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 👨‍🍳 Chef  •  🏷️ Promo Used  •  💳 Before Discount`));
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`<@${chefId}>  \`${promo}\`  ~~${beforeDiscountStr}~~ → **${customerTotalStr}**`));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`${cachedMention(chefId)}  \`${promo}\`  ~~${beforeDiscountStr}~~ → **${customerTotalStr}**`));
   container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(false));
   // Row 3 - highlighted savings
   container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# 💵 Customer Total  •  ✨ Total Savings`));
@@ -1304,6 +1334,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       try {
         const stored = ticketStore.get(channelId);
         if (stored) {
+          // Warm cache for chef pings (see createTicket)
+          try {
+            await Promise.all([...clockedIn].map(id => interaction.guild.members.fetch(id).catch(() => null)));
+          } catch {}
           const fresh = buildTicketContainer(stored.deal, stored.orderData, stored.user, null);
           const pingIds = [...clockedIn];
           const u = [...new Set([stored.user.id, ...pingIds])];
@@ -1739,7 +1773,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const m = interaction.channel.topic?.match(/\b\d{17,20}\b/);
         if (m) customerId = m[0];
       }
-      const customerMention = customerId ? `<@${customerId}>` : '@Unknown';
+      const customerMention = await safeUserMention(interaction.guild, customerId, '@Unknown');
       const chefMention = `<@${interaction.user.id}>`;
       // Update balance
       const bal = getChefBalance(interaction.user.id);
@@ -2029,7 +2063,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (let i = 0; i < stats.top.length; i++) {
           const [chefId, count] = stats.top[i];
           const member = interaction.guild.members.cache.get(chefId);
-          const name = member ? member.displayName : `<@${chefId}>`;
+          const name = member ? member.displayName : cachedMention(chefId);
           const medal = medals[i] || `${i+1}.`;
           topLines.push(`${medal} ${name} - \`${count} orders\``);
         }
@@ -2080,7 +2114,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       for (let i = 0; i < chefEntries.length; i++) {
         const [chefId, bal] = chefEntries[i];
         const member = guild.members.cache.get(chefId);
-        const name = member ? member.displayName : `<@${chefId}>`;
+        const name = member ? member.displayName : cachedMention(chefId);
         const medal = medals[i] || `${i + 1}.`;
         const avgEarnings = bal.totalOrders > 0 ? (bal.balance / bal.totalOrders).toFixed(2) : '0.00';
         lines.push(`${medal} **${name}**\n     \`${bal.totalOrders} orders\` • \`$${bal.balance.toFixed(2)} balance\` • \`$${avgEarnings}/order avg\``);
@@ -2092,7 +2126,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         for (let i = 0; i < todayStats.top.length; i++) {
           const [chefId, count] = todayStats.top[i];
           const member = guild.members.cache.get(chefId);
-          const name = member ? member.displayName : `<@${chefId}>`;
+          const name = member ? member.displayName : cachedMention(chefId);
           const medal = medals[i] || `${i + 1}.`;
           todayLines.push(`${medal} ${name} - \`${count} orders\``);
         }
@@ -2176,7 +2210,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // leaderboard top 3
       const topLines = sorted.slice(0,3).map(([id, p], i) => {
         const m = interaction.guild.members.cache.get(id);
-        const n = m ? m.displayName : `<@${id}>`;
+        const n = m ? m.displayName : cachedMention(id);
         const medal = ['🥇','🥈','🥉'][i] || `${i+1}.`;
         return `${medal} ${n} — \`${p} pts\``;
       });
@@ -2208,9 +2242,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const amount = interaction.options.getNumber('amount');
       const amountStr = `$${amount.toFixed(2)}`;
-      const customerMention = interaction.channel.topic?.match(/\b\d{17,20}\b/)?.[0]
-        ? `<@${interaction.channel.topic.match(/\b\d{17,20}\b/)[0]}>`
-        : 'Customer';
+      const customerMention = await safeUserMention(
+        interaction.guild,
+        interaction.channel.topic?.match(/\b\d{17,20}\b/)?.[0],
+        'Customer'
+      );
       // Payment Request card — matches screenshot: green accent, compact layout
       const container = new ContainerBuilder().setAccentColor(0x3BA55C);
       // Header: 🚀 Payment Request + money thumbnail on right
