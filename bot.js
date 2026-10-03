@@ -292,10 +292,10 @@ function getTodayStats() {
   const top = Object.entries(byChef).sort((a,b)=>b[1]-a[1]).slice(0, 4);
   return { dateStr, total, busiest, top };
 }
-async function updateStatusGif(open) {
+async function updateStatusGif(open, guildArg = null) {
   try {
-    const guild = client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
-    if (!guild) return;
+    const guild = guildArg || client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
+    if (!guild) { console.log('[X] updateStatusGif: no guild'); return; }
     let ch = null;
     try { ch = await guild.channels.fetch(STATUS_CHANNEL_ID); } catch {}
     if (!ch) ch = guild.channels.cache.get(STATUS_CHANNEL_ID);
@@ -304,7 +304,8 @@ async function updateStatusGif(open) {
       // try fresh fetch all
       try { await guild.channels.fetch(); ch = guild.channels.cache.find(c => c.name.includes('status')); } catch {}
     }
-    if (!ch) { console.log('[X] status gif channel not found'); return; }
+    if (!ch) { console.log(`[X] status gif channel not found in guild ${guild.name} (${guild.id}) using ${STATUS_CHANNEL_ID}`); return; }
+    console.log(`[gif] posting ${open ? 'OPEN' : 'CLOSED'} to #${ch.name} in ${guild.name}`);
     if (statusGifMessageId) {
       try {
         const old = await ch.messages.fetch(statusGifMessageId).catch(()=>null);
@@ -357,18 +358,15 @@ async function updateStatusGif(open) {
     else saveStatus(open, null);
   } catch(e){ console.log('[X] updateStatusGif', e.message); }
 }
-async function updateStatusChannel(open) {
+async function updateStatusChannel(open, guildArg = null) {
   try {
-    const guild = client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
-    if (!guild) return;
+    const guild = guildArg || client.guilds.cache.get(GUILD_ID) || client.guilds.cache.first();
+    if (!guild) { console.log('[X] updateStatusChannel: no guild'); return; }
     // fresh fetch to get current name (cache may be stale)
     let ch = null;
     try { ch = await guild.channels.fetch(STATUS_CHANNEL_ID); } catch {}
     if (!ch) ch = guild.channels.cache.get(STATUS_CHANNEL_ID) || guild.channels.cache.find(c => c.name.includes('status'));
-    if (!ch) {
-      console.log(`[X] Status channel ${STATUS_CHANNEL_ID} not found`);
-      return;
-    }
+    if (!ch) { console.log(`[X] Status channel ${STATUS_CHANNEL_ID} not found in guild ${guild.name} (${guild.id})`); return; }
     const newName = open ? '🟢-status' : '🔴-status';
     if (ch.name === newName) {
       console.log(`[i] Status channel already ${newName}`);
@@ -1609,8 +1607,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       try { await interaction.reply({ content: 'Restaurant set to open' }); } catch(e){ console.log('[X] open reply', e.message); }
-      updateStatusChannel(true).catch(e=> console.log('[X] open rename', e.message));
-      updateStatusGif(true).catch(e=> console.log('[X] open gif', e.message));
+      updateStatusChannel(true, interaction.guild).catch(e=> console.log('[X] open rename', e.message));
+      updateStatusGif(true, interaction.guild).catch(e=> console.log('[X] open gif', e.message));
       return;
     }
 
@@ -1621,8 +1619,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       try { await interaction.reply({ content: 'Restaurant set to closed' }); } catch(e){ console.log('[X] closed reply', e.message); }
-      updateStatusChannel(false).catch(e=> console.log('[X] closed rename', e.message));
-      updateStatusGif(false).catch(e=> console.log('[X] closed gif', e.message));
+      updateStatusChannel(false, interaction.guild).catch(e=> console.log('[X] closed rename', e.message));
+      updateStatusGif(false, interaction.guild).catch(e=> console.log('[X] closed gif', e.message));
       return;
     }
 
