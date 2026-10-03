@@ -195,7 +195,13 @@ function cachedMention(id, fallback = '@Unknown') {
 }
 function getChefPings() {
   if (clockedIn.size === 0) return '';
-  return [...clockedIn].map(id => `<@${id}>`).join(' ');
+  // Only emit mentions for users discord.js can actually resolve. An
+  // unresolvable <@id> makes the whole send throw
+  // "Supplied parameter is not a cached User or Role".
+  return [...clockedIn]
+    .filter(id => client.users.cache.has(id))
+    .map(id => `<@${id}>`)
+    .join(' ');
 }
 // Balances for chefs - configurable fee per complete
 const BALANCE_FILE = path.join(DATA_DIR, 'chef_balances.json');
@@ -571,7 +577,7 @@ function buildTicketContainer(deal, orderData, user, claimedBy = null) {
   }
   if (claimedBy) {
     container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ **Claimed by <@${claimedBy}>** — this chef will assist you 1:1.`));
+    container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`✅ **Claimed by ${cachedMention(claimedBy)}** — this chef will assist you 1:1.`));
   } else {
     container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`*A chef will claim your ticket shortly. — User ID: \`${user.id}\`*`));
   }
@@ -1171,7 +1177,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           claimedTickets.delete(channelId);
       saveClaimed();
         } else {
-          await interaction.reply({ content: `⚠️ Already claimed by <@${claimedBy}>`, ephemeral: true });
+          await interaction.reply({ content: `⚠️ Already claimed by ${cachedMention(claimedBy)}`, ephemeral: true });
           return;
         }
       }
@@ -1287,7 +1293,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Only claimer or Admin can unclaim (skip strict check for inferred fallback)
       const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
       if (!inferred && interaction.user.id !== claimedBy && !isAdmin) {
-        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim this.`, ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedMention(claimedBy)} or an Admin can unclaim this.`, ephemeral: true });
         return;
       }
       claimedTickets.delete(channelId);
@@ -1526,7 +1532,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           claimedTickets.delete(interaction.channelId);
       saveClaimed();
         } else {
-          await interaction.reply({ content: `⚠️ Already claimed by <@${cBy}>`, ephemeral: true });
+          await interaction.reply({ content: `⚠️ Already claimed by ${cachedMention(cBy)}`, ephemeral: true });
           return;
         }
       }
@@ -1599,7 +1605,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
       const isAdmin = interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
       if (!inferredSlash && interaction.user.id !== claimedBy && !isAdmin) {
-        await interaction.reply({ content: `❌ Only <@${claimedBy}> or an Admin can unclaim.`, ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedMention(claimedBy)} or an Admin can unclaim.`, ephemeral: true });
         return;
       }
       claimedTickets.delete(interaction.channelId);
@@ -1974,7 +1980,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `1⭐ ${bar(1)}`
       ));
       if (rating.recent && rating.recent.length) {
-        const recentLines = rating.recent.slice(0,3).map(r => `• ${'⭐'.repeat(r.stars)} \`${r.stars}/5\` by <@${r.customerId}> <t:${Math.floor(r.ts/1000)}:R>`).join('\n');
+        const recentLines = rating.recent.slice(0,3).map(r => `• ${'⭐'.repeat(r.stars)} \`${r.stars}/5\` by ${cachedMention(r.customerId)} <t:${Math.floor(r.ts/1000)}:R>`).join('\n');
         container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`**Recent**\n${recentLines}`));
       }
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(`-# Chef ID: \`${uid}\``));
