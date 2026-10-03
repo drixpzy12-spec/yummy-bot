@@ -352,7 +352,7 @@ async function updateStatusGif(open, guildArg = null) {
       : 'https://media1.tenor.com/m/9Wq1jcXr_wUAAAAC/spongebob-are-you-open.gif';
     // Download gif and upload as attachment so Discord always displays it (external tenor URLs fail to embed)
     try {
-      const res = await fetch(gifUrl);
+      const res = await fetch(gifUrl, { signal: AbortSignal.timeout(5000) });
       if (!res.ok) throw new Error(`fetch ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       const filename = open ? 'open.gif' : 'closed.gif';
@@ -593,11 +593,11 @@ async function getTicketGifAttachment(dealShort) {
   };
   const url = map[dealShort] || map['10for30'];
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) { console.log(`[gif] ticket gif HTTP ${res.status}`); return null; }
     const buf = Buffer.from(await res.arrayBuffer());
     return new AttachmentBuilder(buf, { name: 'ticket.gif' });
-  } catch { return null; }
+  } catch (e) { console.log('[gif] ticket gif failed:', e.message); return null; }
 }
 
 async function createTicket(guild, user, dealValue, orderData) {
@@ -796,11 +796,12 @@ function buildPanel() {
 async function getPanelGifAttachment() {
   try {
     const url = 'https://media1.tenor.com/m/dGU8KIYkB3wAAAAC/pizza-anime.gif';
-    const res = await fetch(url);
-    if (!res.ok) return null;
+    // Hard timeout so a stalled CDN can't hang the interaction
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) { console.log(`[gif] panel gif HTTP ${res.status}`); return null; }
     const buf = Buffer.from(await res.arrayBuffer());
     return new AttachmentBuilder(buf, { name: 'panel.gif' });
-  } catch { return null; }
+  } catch (e) { console.log('[gif] panel gif failed:', e.message); return null; }
 }
 
 function buildFaqContainer() {
@@ -1367,12 +1368,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({ content: '❌ Only **Admins** can use `/panel`.', ephemeral: true });
         return;
       }
-      const panel = buildPanel();
-      const targetChannel = interaction.channel;
-      const gifAtt = await getPanelGifAttachment();
-      const files = gifAtt ? [gifAtt] : [];
-      await targetChannel.send({ ...panel, files });
-      await interaction.reply({ content: `✅ Panel sent in <#${targetChannel.id}>`, ephemeral: true });
+      // ACK immediately - downloading the gif over the network can exceed the
+      // 3s interaction window and cause "The application did not respond".
+      try { await interaction.deferReply({ ephemeral: true }); } catch (e) { console.log('[X] panel defer', e.message); }
+      try {
+        const panel = buildPanel();
+        const gifAtt = await getPanelGifAttachment();
+        const files = gifAtt ? [gifAtt] : [];
+        await interaction.channel.send({ ...panel, files });
+        await interaction.editReply({ content: `✅ Panel sent in <#${interaction.channel.id}>` });
+      } catch (e) {
+        console.log('[X] panel', e.message);
+        await interaction.editReply({ content: `❌ Failed to send panel: ${e.message}` }).catch(() => {});
+      }
       return;
     }
 
