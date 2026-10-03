@@ -193,6 +193,16 @@ function cachedMention(id, fallback = '@Unknown') {
   } catch {}
   return `@${id}`;
 }
+// Sync role mention that never throws - emits <@&id> only when the role is
+// cached, otherwise falls back to a @Role-name style label.
+function cachedRoleMention(guild, id, fallback = 'Chef') {
+  if (!id) return fallback;
+  try {
+    const role = guild?.roles?.cache?.get(id);
+    if (role) return role.toString();
+  } catch {}
+  return `@${fallback}`;
+}
 function getChefPings() {
   if (clockedIn.size === 0) return '';
   // Only emit mentions for users discord.js can actually resolve. An
@@ -621,14 +631,25 @@ async function createTicket(guild, user, dealValue, orderData) {
     { id: user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory, PermissionsBitField.Flags.AttachFiles] },
     { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.ManageMessages] }
   ];
-  if (CHEF_ROLE_ID) {
-    permissionOverwrites.push({ id: CHEF_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] });
-  }
+  // Only grant the chef role access if that role actually exists in this guild.
+// A stale CHEF_ROLE_ID (e.g. left over from a previous server) makes Discord
+// reject the entire channel creation.
+let chefRoleOverwrite = null;
+if (CHEF_ROLE_ID && guild.roles.cache.has(CHEF_ROLE_ID)) {
+  chefRoleOverwrite = { id: CHEF_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory] };
+} else {
+  console.log(`[ticket] chef role ${CHEF_ROLE_ID} not found in ${guild.name} - skipping overwrite`);
+}
+
+  if (chefRoleOverwrite) permissionOverwrites.push(chefRoleOverwrite);
+
+  const parent = TICKET_CATEGORY_ID && guild.channels.cache.has(TICKET_CATEGORY_ID) ? TICKET_CATEGORY_ID : null;
+  if (!parent) console.log(`[ticket] ticket category ${TICKET_CATEGORY_ID} not found in ${guild.name} - creating without parent`);
 
   const channel = await guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
-    parent: TICKET_CATEGORY_ID || null,
+    parent,
     topic: `Ticket for ${user.tag} (${user.id}) | Deal: ${deal.label}`,
     permissionOverwrites
   });
@@ -1166,7 +1187,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const member = interaction.member;
 
       if (!hasChefPermission(member, guild)) {
-        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> or higher can claim tickets.', ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)} or higher can claim tickets.`, ephemeral: true });
         return;
       }
 
@@ -1256,7 +1277,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // === BUTTON: Unclaim ===
     if (interaction.isButton() && interaction.customId === 'unclaim_ticket') {
       if (!hasChefPermission(interaction.member, interaction.guild)) {
-        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> or higher can unclaim.', ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)} or higher can unclaim.`, ephemeral: true });
         return;
       }
       const channelId = interaction.channelId;
@@ -1675,7 +1696,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // === SLASH: /clockin ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'clockin') {
       if (!hasChefPermission(interaction.member, interaction.guild)) {
-        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> or higher can use this.', ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)} or higher can use this.`, ephemeral: true });
         return;
       }
       if (clockedIn.has(interaction.user.id)) {
@@ -1691,7 +1712,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // === SLASH: /clockout ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'clockout') {
       if (!hasChefPermission(interaction.member, interaction.guild)) {
-        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> or higher can use this.', ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)} or higher can use this.`, ephemeral: true });
         return;
       }
       if (!clockedIn.has(interaction.user.id)) {
@@ -1729,7 +1750,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
       container.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `### 🕐 Clock In / Out\n` +
-        `• \`/clockin\` — Clock in, start receiving ticket pings (<@&${CHEF_ROLE_ID}>)\n` +
+        `• \`/clockin\` — Clock in, start receiving ticket pings (${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)})\n` +
         `• \`/clockout\` — Clock out, stop receiving pings\n` +
         `• Only clocked-in chefs get pinged`
       ));
@@ -1752,7 +1773,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         `### ✅ Complete & Balance **(DO THIS WHEN FINISHED)**\n` +
         `• \`/complete\` — **Mark order done** in ticket, adds **$2**, frees slot, sends *Order Completed* + *Rate your chef* (customer rates 1-5)\n` +
         `• \`/bal\` — Check your balance & total orders\n` +
-        `• \`/paid @user <amount>\` — Crown <@&${PAID_ROLE_ID}> clears balance (e.g. \`/paid @chef 10\`)\n` +
+        `• \`/paid @user <amount>\` — Crown ${cachedRoleMention(interaction.guild, PAID_ROLE_ID, 'Crown')} clears balance (e.g. \`/paid @chef 10\`)\n` +
         `• \`/today\` — Orders today, busiest hour, top chefs`
       ));
       container.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
@@ -1770,7 +1791,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // === SLASH: /complete ===
     if (interaction.isChatInputCommand() && interaction.commandName === 'complete') {
       if (!hasChefPermission(interaction.member, interaction.guild)) {
-        await interaction.reply({ content: '❌ Only <@&' + CHEF_ROLE_ID + '> can use `/complete`.', ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, CHEF_ROLE_ID)} can use \`/complete\`.`, ephemeral: true });
         return;
       }
       const chId = interaction.channelId;
@@ -2013,7 +2034,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const paidRole = interaction.guild.roles.cache.get(PAID_ROLE_ID);
       const isHigher = paidRole ? interaction.member.roles.highest.position >= paidRole.position : false;
       if (!hasPaidRole && !isHigher) {
-        await interaction.reply({ content: `❌ Only <@&${PAID_ROLE_ID}> or higher can use \`/paid\`.`, ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, PAID_ROLE_ID, 'Crown')} or higher can use \`/paid\`.`, ephemeral: true });
         return;
       }
       const targetUser = interaction.options.getUser('user');
@@ -2045,7 +2066,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const paidRole = interaction.guild.roles.cache.get(PAID_ROLE_ID);
       const isHigher = paidRole ? interaction.member.roles.highest.position >= paidRole.position : false;
       if (!hasPaidRole && !isHigher) {
-        await interaction.reply({ content: `❌ Only <@&${PAID_ROLE_ID}> or higher can use \`/addorder\`.`, ephemeral: true });
+        await interaction.reply({ content: `❌ Only ${cachedRoleMention(interaction.guild, PAID_ROLE_ID, 'Crown')} or higher can use \`/addorder\`.`, ephemeral: true });
         return;
       }
       const target = interaction.options.getUser('chef');
@@ -2567,6 +2588,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   } catch (err) {
     console.error('[X] Interaction error:', err);
+    if (err?.stack) console.error('[X] Stack:', err.stack);
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({ content: '❌ Error: ' + err.message, ephemeral: true }).catch(()=>{});
     } else {
